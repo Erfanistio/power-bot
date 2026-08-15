@@ -735,29 +735,35 @@ function createBot(env, executionCtx = null) {
   // Main Menu Buttons
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
+    const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
+    if (!billId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await executeScheduleLookup(ctx, storage, user.activeBillId, 'today');
+    await executeScheduleLookup(ctx, storage, billId, 'today');
   });
 
   bot.hears('🗓 خاموشی فردا', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
+    const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
+    if (!billId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await executeScheduleLookup(ctx, storage, user.activeBillId, 'tomorrow');
+    await executeScheduleLookup(ctx, storage, billId, 'tomorrow');
   });
 
   bot.hears('📋 کل برنامه هفتگی', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
+    const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
+    if (!billId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await executeScheduleLookup(ctx, storage, user.activeBillId, 'all');
+    await executeScheduleLookup(ctx, storage, billId, 'all');
   });
 
   bot.hears(['🔖 نشان‌شده‌های من', '📂 شناسه‌های من'], async (ctx) => {
@@ -1019,13 +1025,19 @@ function createBot(env, executionCtx = null) {
 }
 
 async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEdit = false) {
-  const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
-  const user = await storage.getUser(ctx.from.id);
-  const savedItem = user.savedBills.find(b => b.billId === billId);
-  const customLabel = savedItem ? savedItem.label : '';
-  const isBookmarked = Boolean(savedItem);
-
   try {
+    const billId = toEnglishDigits(String(rawBillId || '')).replace(/\D/g, '');
+    if (!billId || billId.length < 8) {
+      await ctx.reply('❌ شناسه قبض نامعتبر است. لطفاً یک شناسه قبض ۱۳ رقمی معتبر ارسال کنید.');
+      return;
+    }
+
+    const user = await storage.getUser(ctx.from.id);
+    const savedBills = Array.isArray(user?.savedBills) ? user.savedBills : [];
+    const savedItem = savedBills.find(b => b.billId === billId);
+    const customLabel = savedItem ? savedItem.label : '';
+    const isBookmarked = Boolean(savedItem);
+
     const result = await fetchGopedSchedule(billId);
     const text = formatScheduleMessage(result, mode, customLabel);
     const replyMarkup = result.Code === 1 ? getScheduleInlineKeyboard(billId, mode, isBookmarked) : undefined;
@@ -1044,8 +1056,15 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
       });
     }
   } catch (err) {
-    const errText = `❌ خطا در دریافت اطلاعات:\n${err.message}`;
-    await ctx.reply(errText);
+    console.error('[ExecuteScheduleLookup Error]:', err);
+    const errText = `❌ خطا در دریافت اطلاعات از سامانه توزیع برق:\n${err.message || 'پاسخی از سرور دریافت نشد.'}\n\n<i>لطفاً چند لحظه بعد مجدداً تلاش فرمایید.</i>`;
+    if (isEdit && ctx.callbackQuery?.message) {
+      await ctx.editMessageText(errText, { parse_mode: 'HTML' }).catch(async () => {
+        await ctx.reply(errText, { parse_mode: 'HTML' });
+      });
+    } else {
+      await ctx.reply(errText, { parse_mode: 'HTML' });
+    }
   }
 }
 
