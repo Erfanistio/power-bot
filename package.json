@@ -1,0 +1,26 @@
+{
+  "name": "goped-power-bot",
+  "version": "1.0.0",
+  "description": "Telegram Bot for Golestan Electricity Outage Schedules (GOPED)",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node test/test-api.js"
+  },
+  "keywords": [
+    "telegram-bot",
+    "goped",
+    "power-outage",
+    "blackout",
+    "iran-electricity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "grammy": "^1.35.0",
+    "node-cron": "^3.0.3"
+  }
+}

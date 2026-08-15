@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  power-bot:
+    build: .
+    container_name: goped-power-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
