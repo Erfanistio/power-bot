@@ -511,10 +511,15 @@ function formatSavedBillsList(savedBills = [], activeBillId = null) {
 
 // ================= WORKER BOT CORE =================
 
-function createBot(env) {
+function createBot(env, executionCtx = null) {
   const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
   const bot = new Bot(token);
   const storage = new CloudflareStorage(env.POWERBOT_KV);
+
+  // Global error handler so bot never crashes unhandled
+  bot.catch((err) => {
+    console.error('[Bot Catch Error]:', err.error || err);
+  });
 
   // User profile tracking
   bot.use(async (ctx, next) => {
@@ -675,44 +680,56 @@ function createBot(env) {
     const totalUsers = realUsers.length;
     const statusMsg = await ctx.reply(`🚀 در حال ارسال پیام به <b>${toPersianDigits(totalUsers)}</b> کاربر...`, { parse_mode: 'HTML' });
 
-    let successCount = 0;
-    let blockedCount = 0;
-    let failedCount = 0;
-    const startTime = Date.now();
+    const doBroadcast = async () => {
+      let successCount = 0;
+      let blockedCount = 0;
+      let failedCount = 0;
+      const startTime = Date.now();
 
-    for (const u of realUsers) {
-      try {
-        if (replyMsg) {
-          await ctx.api.copyMessage(u.userId, ctx.chat.id, replyMsg.message_id);
-        } else {
+      const chunkSize = 5;
+      for (let i = 0; i < realUsers.length; i += chunkSize) {
+        const chunk = realUsers.slice(i, i + chunkSize);
+        await Promise.allSettled(chunk.map(async (u) => {
           try {
-            await ctx.api.sendMessage(u.userId, textArg, { parse_mode: 'HTML' });
-          } catch {
-            await ctx.api.sendMessage(u.userId, textArg);
+            if (replyMsg) {
+              await ctx.api.copyMessage(u.userId, ctx.chat.id, replyMsg.message_id);
+            } else {
+              try {
+                await ctx.api.sendMessage(u.userId, textArg, { parse_mode: 'HTML' });
+              } catch {
+                await ctx.api.sendMessage(u.userId, textArg);
+              }
+            }
+            successCount++;
+          } catch (err) {
+            if (err.description && (err.description.includes('bot was blocked') || err.description.includes('user is deactivated') || err.description.includes('chat not found'))) {
+              blockedCount++;
+            } else {
+              failedCount++;
+            }
           }
-        }
-        successCount++;
-      } catch (err) {
-        if (err.description && (err.description.includes('bot was blocked') || err.description.includes('user is deactivated') || err.description.includes('chat not found'))) {
-          blockedCount++;
-        } else {
-          failedCount++;
-        }
+        }));
+        await new Promise(r => setTimeout(r, 40));
       }
-      await new Promise(r => setTimeout(r, 45));
+
+      const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      const report = `📢 <b>گزارش ارسال همگانی (Shout):</b>\n\n` +
+        `👥 <b>کل مخاطبان:</b> <code>${toPersianDigits(totalUsers)}</code>\n` +
+        `✅ <b>ارسال موفق:</b> <code>${toPersianDigits(successCount)}</code>\n` +
+        `🚫 <b>بلاک / غیرفعال:</b> <code>${toPersianDigits(blockedCount)}</code>\n` +
+        `❌ <b>خطاهای دیگر:</b> <code>${toPersianDigits(failedCount)}</code>\n` +
+        `⏱ <b>مدت زمان:</b> <code>${toPersianDigits(durationSec)}</code> ثانیه`;
+
+      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, { parse_mode: 'HTML' }).catch(async () => {
+        await ctx.reply(report, { parse_mode: 'HTML' }).catch(() => {});
+      });
+    };
+
+    if (executionCtx && typeof executionCtx.waitUntil === 'function') {
+      executionCtx.waitUntil(doBroadcast());
+    } else {
+      await doBroadcast();
     }
-
-    const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
-    const report = `📢 <b>گزارش ارسال همگانی (Shout):</b>\n\n` +
-      `👥 <b>کل مخاطبان:</b> <code>${toPersianDigits(totalUsers)}</code>\n` +
-      `✅ <b>ارسال موفق:</b> <code>${toPersianDigits(successCount)}</code>\n` +
-      `🚫 <b>بلاک / غیرفعال:</b> <code>${toPersianDigits(blockedCount)}</code>\n` +
-      `❌ <b>خطاهای دیگر:</b> <code>${toPersianDigits(failedCount)}</code>\n` +
-      `⏱ <b>مدت زمان:</b> <code>${toPersianDigits(durationSec)}</code> ثانیه`;
-
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, { parse_mode: 'HTML' }).catch(async () => {
-      await ctx.reply(report, { parse_mode: 'HTML' });
-    });
   });
 
   // Main Menu Buttons
@@ -1052,8 +1069,14 @@ export default {
       }
     }
 
-    const { bot } = createBot(env);
-    return webhookCallback(bot, 'cloudflare-mod')(request);
+    try {
+      const { bot } = createBot(env, ctx);
+      const handleCallback = webhookCallback(bot, 'cloudflare-mod');
+      return await handleCallback(request);
+    } catch (err) {
+      console.error('[Worker Fatal Webhook Error]:', err);
+      return new Response('OK', { status: 200 });
+    }
   },
 
   async scheduled(event, env, ctx) {
