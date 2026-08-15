@@ -1,13 +1,15 @@
 /**
- * Cloudflare Worker for Golestan Electricity Outage Telegram Bot
- * Runs 100% serverless on Cloudflare Workers.
+ * Full Cloudflare Worker for Golestan Electricity Outage Telegram Bot
+ * Runs 100% serverless on Cloudflare Workers with Cloudflare KV storage
+ * and Cloudflare Cron Triggers for daily automated outage alerts.
  */
 import { Bot, webhookCallback, InlineKeyboard, Keyboard } from 'grammy';
 
 const GOPED_API_URL = 'https://modiriattolid.goped.ir:8090/';
 const GOPED_AUTH_TOKEN = '7f3c2a91-6d84-4b17-a5e9-2c0f8d6b31a4';
 
-// Helper: Persian number converter
+// ================= UTILITIES =================
+
 function toEnglishDigits(str) {
   if (!str) return '';
   const p = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
@@ -78,6 +80,21 @@ function getIranGregorianDate(offsetDays = 0) {
   return `${parts[0]}-${parts[1]}-${parts[2]}`;
 }
 
+function getTodayJalali(offsetDays = 0) {
+  return parseDateInfo(getIranGregorianDate(offsetDays)).jalaliStr;
+}
+
+function getPersianWeekdayName(offsetDays = 0) {
+  return parseDateInfo(getIranGregorianDate(offsetDays)).weekday;
+}
+
+function isUserAdmin(env, userId) {
+  const adminIds = (env.ADMIN_IDS || '7250238664').split(',').map(s => s.trim()).filter(Boolean);
+  return adminIds.includes(String(userId));
+}
+
+// ================= GOPED API CLIENT =================
+
 async function fetchGopedSchedule(billId) {
   const cleanId = toEnglishDigits(billId).replace(/\D/g, '');
   const url = `${GOPED_API_URL}Api/GetSchedule_Web?BillId=${encodeURIComponent(cleanId)}`;
@@ -105,207 +122,959 @@ async function fetchGopedNotice() {
   return await res.json();
 }
 
-function formatSchedule(data, mode = 'all') {
+// ================= CLOUDFLARE KV DATABASE =================
+
+class CloudflareStorage {
+  constructor(kv) {
+    this.kv = kv;
+  }
+
+  async getUser(userId) {
+    const id = String(userId);
+    let user = null;
+    if (this.kv) {
+      user = await this.kv.get(`user:${id}`, 'json');
+    }
+    if (!user) {
+      user = {
+        userId: id,
+        username: '',
+        firstName: '',
+        savedBills: [],
+        activeBillId: null,
+        notifications: {
+          enabled: true,
+          time: '08:00',
+          lastNotifiedDate: null
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      // Seed default bookmark for owner if new
+      if (id === '7250238664') {
+        user.savedBills = [{ billId: '6357330214322', label: 'خونه', addedAt: new Date().toISOString() }];
+        user.activeBillId = '6357330214322';
+      }
+      await this.saveUser(user);
+    }
+    return user;
+  }
+
+  async saveUser(user) {
+    if (!this.kv) return;
+    user.updatedAt = new Date().toISOString();
+    await this.kv.put(`user:${user.userId}`, JSON.stringify(user));
+
+    // Update users index list
+    let index = await this.kv.get('users_index', 'json');
+    if (!Array.isArray(index)) index = [];
+    if (!index.includes(String(user.userId))) {
+      index.push(String(user.userId));
+      await this.kv.put('users_index', JSON.stringify(index));
+    }
+  }
+
+  async getAllUsers() {
+    if (!this.kv) return [];
+    let index = await this.kv.get('users_index', 'json');
+    if (!Array.isArray(index)) index = ['7250238664'];
+    const users = [];
+    for (const uid of index) {
+      const u = await this.kv.get(`user:${uid}`, 'json');
+      if (u) users.push(u);
+    }
+    return users.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }
+
+  async getStats() {
+    const users = await this.getAllUsers();
+    let totalSavedBills = 0;
+    let subscribedUsers = 0;
+    users.forEach(u => {
+      if (u.savedBills) totalSavedBills += u.savedBills.length;
+      if (u.notifications?.enabled) subscribedUsers++;
+    });
+    return {
+      totalUsers: users.length,
+      totalSavedBills,
+      subscribedUsers
+    };
+  }
+
+  async addBillId(userId, rawBillId, label = '') {
+    const user = await this.getUser(userId);
+    const billId = toEnglishDigits(String(rawBillId)).replace(/\D/g, '').trim();
+    if (!billId) return { success: false, message: 'شناسه نامعتبر است.' };
+
+    const existingIdx = user.savedBills.findIndex(b => b.billId === billId);
+    const finalLabel = label && label.trim() ? label.trim() : `قبض ${user.savedBills.length + 1}`;
+
+    if (existingIdx >= 0) {
+      user.savedBills[existingIdx].label = finalLabel;
+    } else {
+      user.savedBills.push({
+        billId,
+        label: finalLabel,
+        addedAt: new Date().toISOString()
+      });
+    }
+    user.activeBillId = billId;
+    await this.saveUser(user);
+    return { success: true, billId, label: finalLabel };
+  }
+
+  async removeBillId(userId, rawBillId) {
+    const user = await this.getUser(userId);
+    const billId = toEnglishDigits(String(rawBillId)).replace(/\D/g, '').trim();
+    user.savedBills = user.savedBills.filter(b => b.billId !== billId);
+    if (user.activeBillId === billId) {
+      user.activeBillId = user.savedBills.length > 0 ? user.savedBills[0].billId : null;
+    }
+    await this.saveUser(user);
+    return true;
+  }
+
+  async renameBillId(userId, rawBillId, newLabel) {
+    const user = await this.getUser(userId);
+    const billId = toEnglishDigits(String(rawBillId)).replace(/\D/g, '').trim();
+    const item = user.savedBills.find(b => b.billId === billId);
+    if (item && newLabel && newLabel.trim()) {
+      item.label = newLabel.trim();
+      await this.saveUser(user);
+      return true;
+    }
+    return false;
+  }
+
+  async setActiveBillId(userId, rawBillId) {
+    const user = await this.getUser(userId);
+    const billId = toEnglishDigits(String(rawBillId)).replace(/\D/g, '').trim();
+    if (user.savedBills.some(b => b.billId === billId)) {
+      user.activeBillId = billId;
+      await this.saveUser(user);
+      return true;
+    }
+    return false;
+  }
+
+  async setNotifications(userId, enabled) {
+    const user = await this.getUser(userId);
+    user.notifications.enabled = Boolean(enabled);
+    await this.saveUser(user);
+    return user.notifications;
+  }
+
+  async getState(userId) {
+    if (!this.kv) return null;
+    return await this.kv.get(`state:${userId}`, 'json');
+  }
+
+  async setState(userId, stateObj) {
+    if (!this.kv) return;
+    if (!stateObj) {
+      await this.kv.delete(`state:${userId}`);
+    } else {
+      await this.kv.put(`state:${userId}`, JSON.stringify(stateObj), { expirationTtl: 600 });
+    }
+  }
+}
+
+// ================= KEYBOARDS & FORMATTERS =================
+
+function getMainReplyKeyboard(savedBills = []) {
+  const kb = new Keyboard();
+
+  if (savedBills && savedBills.length > 0) {
+    let countInRow = 0;
+    savedBills.forEach((b, idx) => {
+      kb.text(`🔖 ${b.label}`);
+      countInRow++;
+      if (countInRow === 2 && idx < savedBills.length - 1) {
+        kb.row();
+        countInRow = 0;
+      }
+    });
+    kb.row();
+  }
+
+  kb.text('⚡️ خاموشی امروز').text('🗓 خاموشی فردا')
+    .row()
+    .text('📋 کل برنامه هفتگی').text('🔖 نشان‌شده‌های من')
+    .row()
+    .text('🔔 هشدار خودکار').text('📢 اطلاعیه‌ها')
+    .row()
+    .text('➕ افزودن نشان جدید').text('ℹ️ راهنما')
+    .resized();
+
+  return kb;
+}
+
+function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = false) {
+  const kb = new InlineKeyboard();
+  if (currentMode !== 'today') kb.text('⚡️ امروز', `sched:today:${billId}`);
+  if (currentMode !== 'tomorrow') kb.text('🗓 فردا', `sched:tom:${billId}`);
+  if (currentMode !== 'all') kb.text('📋 کل جدول', `sched:all:${billId}`);
+  kb.row().text('🔄 بروزرسانی', `sched:${currentMode}:${billId}`);
+
+  if (!isBookmarked) {
+    kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
+  } else {
+    kb.text('✏️ تغییر نام', `rename_prompt:${billId}`);
+    kb.text('🗑 حذف نشان', `delete_bill_do:${billId}`);
+  }
+  return kb;
+}
+
+function getSavedBillsInlineKeyboard(savedBills = [], activeBillId = null) {
+  const kb = new InlineKeyboard();
+  savedBills.forEach(b => {
+    const isAct = b.billId === activeBillId ? '⭐️ ' : '';
+    kb.text(`${isAct}🔖 ${b.label} (${toPersianDigits(b.billId.slice(-4))})`, `select_bill:${b.billId}`).row();
+  });
+  kb.text('➕ افزودن نشان جدید', 'add_bill_prompt').row();
+  if (savedBills.length > 0) {
+    kb.text('✏️ تغییر نام نشان', 'rename_bill_menu');
+    kb.text('🗑 حذف نشان', 'delete_bill_menu').row();
+  }
+  return kb;
+}
+
+function getRenameBillsInlineKeyboard(savedBills = []) {
+  const kb = new InlineKeyboard();
+  savedBills.forEach(b => {
+    kb.text(`✏️ ${b.label}`, `rename_prompt:${b.billId}`).row();
+  });
+  kb.text('🔙 بازگشت', 'view_saved_bills');
+  return kb;
+}
+
+function getDeleteBillsInlineKeyboard(savedBills = []) {
+  const kb = new InlineKeyboard();
+  savedBills.forEach(b => {
+    kb.text(`🗑 حذف ${b.label}`, `delete_bill_do:${b.billId}`).row();
+  });
+  kb.text('🔙 بازگشت', 'view_saved_bills');
+  return kb;
+}
+
+function getNotificationSettingsKeyboard(isEnabled = true) {
+  const kb = new InlineKeyboard();
+  const toggleText = isEnabled ? '🔕 غیرفعال‌سازی اطلاع‌رسانی روزانه' : '🔔 فعال‌سازی اطلاع‌رسانی روزانه';
+  kb.text(toggleText, `toggle_notifications:${isEnabled ? '0' : '1'}`).row();
+  kb.text('🔙 بازگشت به منوی اصلی', 'back_to_main');
+  return kb;
+}
+
+function formatBlackoutCard(blackout, isToday = false, isTomorrow = false) {
+  const dateInfo = parseDateInfo(blackout.date || blackout.Date);
+  const persianDate = toPersianDigits(dateInfo.jalaliStr || blackout.date || blackout.Date);
+  const weekday = dateInfo.weekday ? ` (${dateInfo.weekday})` : '';
+
+  let prefix = '📅';
+  let badge = '';
+  if (isToday) {
+    prefix = '⚡️';
+    badge = ' 🔴 [امروز]';
+  } else if (isTomorrow) {
+    prefix = '⚡️';
+    badge = ' 🟡 [فردا]';
+  }
+
+  let text = `${prefix} <b>تاریخ:</b> ${persianDate}${weekday}${badge}\n`;
+  const from = blackout.from || blackout.From;
+  const to = blackout.to || blackout.To;
+  if (from && to) {
+    text += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(formatTimeShort(from))}</code> تا <code>${toPersianDigits(formatTimeShort(to))}</code>\n`;
+  }
+  const r1From = blackout.reserve1From || blackout.Reserve1From;
+  const r1To = blackout.reserve1To || blackout.Reserve1To;
+  if (r1From && r1To) {
+    text += `   ⚠️ <b>نوبت اول احتمالی:</b> <code>${toPersianDigits(formatTimeShort(r1From))}</code> تا <code>${toPersianDigits(formatTimeShort(r1To))}</code>\n`;
+  }
+  return text;
+}
+
+function formatScheduleMessage(data, mode = 'all', customLabel = '') {
   if (data.Code !== 1 || !data.Result) {
-    return `❌ ${data.Description || 'شناسه قبض یافت نشد یا برنامه‌ای ثبت نشده است.'}`;
+    return `❌ <b>خطا در دریافت اطلاعات:</b>\n${data.Description || 'شناسه قبض یافت نشد یا برنامه‌ای ثبت نشده است.'}`;
   }
 
   const customer = data.Result.Customer || {};
   const blackouts = data.Result.Blackouts || [];
   const todayGregorian = getIranGregorianDate(0);
   const tomorrowGregorian = getIranGregorianDate(1);
-  const todayInfo = parseDateInfo(todayGregorian);
-  const tomorrowInfo = parseDateInfo(tomorrowGregorian);
+  const todayJalali = getTodayJalali(0);
+  const tomorrowJalali = getTodayJalali(1);
+  const todayWeekday = getPersianWeekdayName(0);
+  const tomorrowWeekday = getPersianWeekdayName(1);
 
-  let header = `⚡️ <b>برنامه خاموشی برق گلستان</b>\n`;
+  let header = `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
+  if (customLabel) header += `🏷 <b>عنوان:</b> ${customLabel}\n`;
   if (customer.BillId) header += `📄 <b>شناسه قبض:</b> <code>${toPersianDigits(customer.BillId)}</code>\n`;
   if (customer.Name) header += `👤 <b>مشترک:</b> ${customer.Name}\n`;
-  if (customer.DistributionTitle) header += `📍 <b>منطقه:</b> ${customer.DistributionTitle}\n`;
-  header += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+  if (customer.DistributionTitle) header += `📍 <b>منطقه / امور:</b> ${customer.DistributionTitle}\n`;
+  header += `━━━━━━━━━━━━━━━━━━━━\n`;
 
-  const matchesDate = (bDate, targetG) => {
+  const matchesDate = (bDate, targetG, targetJ) => {
     const info = parseDateInfo(bDate);
-    return info.gregorianStr === targetG;
+    return info.gregorianStr === targetG || info.jalaliStr === targetJ;
   };
 
   if (mode === 'today') {
-    const todayBlackouts = blackouts.filter(b => matchesDate(b.Date || b.date, todayGregorian));
-    let body = `📅 <b>برنامه خاموشی امروز (${todayInfo.weekday} - ${toPersianDigits(todayInfo.jalaliStr)}):</b>\n\n`;
+    const todayBlackouts = blackouts.filter(b => matchesDate(b.Date || b.date, todayGregorian, todayJalali));
+    let body = `📅 <b>برنامه خاموشی امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n`;
     if (todayBlackouts.length === 0) {
       body += `🟢 <b>خوشبختانه برای امروز هیچ قطعی برق برنامه‌ریزی‌شده‌ای ثبت نشده است.</b>\n`;
     } else {
       todayBlackouts.forEach(b => {
-        body += `⚡️ <b>تاریخ:</b> ${toPersianDigits(todayInfo.jalaliStr)} 🔴 [امروز]\n`;
-        if (b.From && b.To) body += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(formatTimeShort(b.From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.To))}</code>\n`;
-        if (b.Reserve1From && b.Reserve1To) body += `   ⚠️ <b>نوبت اول احتمالی:</b> <code>${toPersianDigits(formatTimeShort(b.Reserve1From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.Reserve1To))}</code>\n`;
-        body += '\n';
+        body += formatBlackoutCard(b, true, false) + '\n';
       });
+      body += `<i>⚠️ توجه: مدت زمان احتمالی خاموشی معمولاً تا ۲ ساعت می‌باشد.</i>\n`;
     }
     return header + body;
   }
 
   if (mode === 'tomorrow') {
-    const tomorrowBlackouts = blackouts.filter(b => matchesDate(b.Date || b.date, tomorrowGregorian));
-    let body = `📅 <b>برنامه خاموشی فردا (${tomorrowInfo.weekday} - ${toPersianDigits(tomorrowInfo.jalaliStr)}):</b>\n\n`;
+    const tomorrowBlackouts = blackouts.filter(b => matchesDate(b.Date || b.date, tomorrowGregorian, tomorrowJalali));
+    let body = `📅 <b>برنامه خاموشی فردا (${tomorrowWeekday} - ${toPersianDigits(tomorrowJalali)}):</b>\n\n`;
     if (tomorrowBlackouts.length === 0) {
       body += `🟢 <b>برای فردا قطعی برق برنامه‌ریزی‌شده‌ای ثبت نشده است.</b>\n`;
     } else {
       tomorrowBlackouts.forEach(b => {
-        body += `⚡️ <b>تاریخ:</b> ${toPersianDigits(tomorrowInfo.jalaliStr)} 🟡 [فردا]\n`;
-        if (b.From && b.To) body += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(formatTimeShort(b.From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.To))}</code>\n`;
-        if (b.Reserve1From && b.Reserve1To) body += `   ⚠️ <b>نوبت اول احتمالی:</b> <code>${toPersianDigits(formatTimeShort(b.Reserve1From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.Reserve1To))}</code>\n`;
-        body += '\n';
+        body += formatBlackoutCard(b, false, true) + '\n';
       });
+      body += `<i>⚠️ توجه: جدول خاموشی ممکن است در ساعات پایانی روز به‌روزرسانی شود.</i>\n`;
     }
     return header + body;
   }
 
-  // All mode
-  if (blackouts.length === 0) {
-    return header + `🟢 در حال حاضر هیچ جدول خاموشی فعالی برای این شناسه در سامانه ثبت نشده است.\n`;
+  // All schedules mode
+  const todayBlackouts = blackouts.filter(b => matchesDate(b.Date || b.date, todayGregorian, todayJalali));
+  let body = `📋 <b>جدول کامل زمان‌بندی خاموشی:</b>\n\n`;
+
+  if (todayBlackouts.length === 0 && blackouts.length > 0) {
+    body += `🟢 <b>امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b> بدون قطعی برق برنامه‌ریزی‌شده\n\n`;
   }
 
-  let body = `📋 <b>جدول کامل زمان‌بندی خاموشی:</b>\n\n`;
-  blackouts.forEach(b => {
-    const info = parseDateInfo(b.Date || b.date);
-    const isToday = info.gregorianStr === todayGregorian;
-    const isTomorrow = info.gregorianStr === tomorrowGregorian;
+  if (blackouts.length === 0) {
+    body += `🟢 در حال حاضر هیچ جدول خاموشی فعالی برای این شناسه در سامانه ثبت نشده است.\n`;
+  } else {
+    blackouts.forEach(b => {
+      const isToday = matchesDate(b.Date || b.date, todayGregorian, todayJalali);
+      const isTomorrow = matchesDate(b.Date || b.date, tomorrowGregorian, tomorrowJalali);
+      body += formatBlackoutCard(b, isToday, isTomorrow) + '\n';
+    });
+    body += `<i>ℹ️ منبع: سامانه شرکت توزیع نیروی برق استان گلستان</i>\n`;
+  }
 
-    let tag = '';
-    if (isToday) tag = ' 🔴 [امروز]';
-    else if (isTomorrow) tag = ' 🟡 [فردا]';
+  return header + body;
+}
 
-    const weekday = info.weekday ? ` (${info.weekday})` : '';
-    body += `📅 <b>تاریخ:</b> ${toPersianDigits(info.jalaliStr || b.Date)}${weekday}${tag}\n`;
+function formatSavedBillsList(savedBills = [], activeBillId = null) {
+  if (!savedBills || savedBills.length === 0) {
+    return `🔖 <b>لیست قبض‌های نشان‌شده (Bookmarks):</b>\n\nهنوز هیچ شناسه قبضی را نشان نکرده‌اید!\nکافیست شناسه قبض ۱۳ رقمی خود را بفرستید تا ذخیره شود و همیشه روی کیبورد شما قرار بگیرد.`;
+  }
+  let text = `🔖 <b>قبض‌های نشان‌شده شما (Bookmarks):</b>\n\n`;
+  savedBills.forEach((b, idx) => {
+    const isActive = b.billId === activeBillId ? ' ⭐️ (فعال)' : '';
+    text += `${toPersianDigits(idx + 1)}. <b>${b.label}</b>${isActive}\n   📄 شناسه: <code>${toPersianDigits(b.billId)}</code>\n\n`;
+  });
+  text += `👇 برای مشاهده آنی برنامه یا مدیریت، روی دکمه‌های زیر بزنید:`;
+  return text;
+}
 
-    if (b.From && b.To) {
-      body += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(formatTimeShort(b.From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.To))}</code>\n`;
+// ================= WORKER BOT CORE =================
+
+function createBot(env) {
+  const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
+  const bot = new Bot(token);
+  const storage = new CloudflareStorage(env.POWERBOT_KV);
+
+  // User profile tracking
+  bot.use(async (ctx, next) => {
+    if (ctx.from) {
+      const user = await storage.getUser(ctx.from.id);
+      let changed = false;
+      if (ctx.from.username && user.username !== ctx.from.username) {
+        user.username = ctx.from.username;
+        changed = true;
+      }
+      if (ctx.from.first_name && user.firstName !== ctx.from.first_name) {
+        user.firstName = ctx.from.first_name;
+        changed = true;
+      }
+      if (changed) await storage.saveUser(user);
     }
-    if (b.Reserve1From && b.Reserve1To) {
-      body += `   ⚠️ <b>نوبت اول احتمالی:</b> <code>${toPersianDigits(formatTimeShort(b.Reserve1From))}</code> تا <code>${toPersianDigits(formatTimeShort(b.Reserve1To))}</code>\n`;
-    }
-    body += '\n';
+    await next();
   });
 
-  return header + body + `<i>ℹ️ منبع: سامانه شرکت توزیع نیروی برق استان گلستان</i>`;
-}
+  bot.command('start', async (ctx) => {
+    await storage.setState(ctx.from.id, null);
+    const user = await storage.getUser(ctx.from.id);
+    const welcome = `سلام ${ctx.from.first_name || ''} عزیز! 👋\n` +
+      `به <b>بات استعلام خاموشی برق استان گلستان</b> خوش آمدید. ⚡️💡\n\n` +
+      `با این بات می‌توانید:\n` +
+      `• برنامه قطعی برق امروز، فردا و کل هفته را در لحظه ببینید.\n` +
+      `• قبض‌های خود را <b>نشان (Bookmark)</b> کنید تا همیشه روی کیبورد در دسترستان باشند.\n` +
+      `• هر روز صبح ساعت ۸:۰۰ در صورت وجود قطعی، پیام هشدار خودکار دریافت کنید.\n\n` +
+      `👇 <b>برای شروع:</b>\nشناسه قبض ۱۳ رقمی خود را ارسال کنید یا از دکمه‌های زیر استفاده نمایید.`;
 
-function getReplyKeyboard() {
-  return new Keyboard()
-    .text('⚡️ خاموشی امروز').text('🗓 خاموشی فردا')
-    .row()
-    .text('📋 کل برنامه هفتگی').text('📢 اطلاعیه‌ها')
-    .row()
-    .text('ℹ️ راهنما')
-    .resized();
-}
+    await ctx.reply(welcome, {
+      parse_mode: 'HTML',
+      reply_markup: getMainReplyKeyboard(user.savedBills)
+    });
+  });
 
-function getInlineButtons(billId, mode = 'all') {
-  const kb = new InlineKeyboard();
-  if (mode !== 'today') kb.text('⚡️ امروز', `cf:today:${billId}`);
-  if (mode !== 'tomorrow') kb.text('🗓 فردا', `cf:tom:${billId}`);
-  if (mode !== 'all') kb.text('📋 کل جدول', `cf:all:${billId}`);
-  kb.row().text('🔄 بروزرسانی', `cf:${mode}:${billId}`);
-  return kb;
-}
+  bot.command('help', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    const helpText = `📖 <b>راهنمای استفاده از ربات خاموشی برق گلستان:</b>\n\n` +
+      `1️⃣ <b>استعلام سریع:</b> شناسه قبض ۱۳ رقمی خود را مستقیم بفرستید.\n` +
+      `2️⃣ <b>نشان کردن (Bookmark):</b> شناسه‌های خود را با نام دلخواه (مثلاً: <code>/bookmark 1234567890123 خونه</code>) نشان کنید تا همیشه روی کیبورد در دسترس باشند.\n` +
+      `3️⃣ <b>مدیریت نشان‌ها:</b> با زدن دکمه 🔖 نشان‌شده‌های من یا دستور <code>/bookmarks</code> نشان‌های خود را تغییر نام داده یا حذف کنید.\n` +
+      `4️⃣ <b>هشدار روزانه:</b> با فعال بودن هشدار، هر روز صبح در صورت وجود قطعی برق، پیام هشدار دریافت خواهید کرد.\n` +
+      `5️⃣ <b>اطلاعیه‌ها:</b> مشاهده آخرین اخبار و اطلاعیه‌های رسمی شرکت توزیع با دکمه 📢 اطلاعیه‌ها.`;
+    await ctx.reply(helpText, {
+      parse_mode: 'HTML',
+      reply_markup: getMainReplyKeyboard(user.savedBills)
+    });
+  });
 
-export default {
-  async fetch(request, env) {
-    const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
-    const bot = new Bot(token);
+  bot.command('notice', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    try {
+      const notice = await fetchGopedNotice();
+      const text = (notice.Result || '').replace(/<br\s*[\/]?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+      await ctx.reply(`📢 <b>اطلاعیه شرکت توزیع برق:</b>\n\n${text || 'اطلاعیه‌ای وجود ندارد.'}`, {
+        parse_mode: 'HTML',
+        reply_markup: getMainReplyKeyboard(user.savedBills)
+      });
+    } catch (err) {
+      await ctx.reply(`❌ خطا در دریافت اطلاعیه: ${err.message}`);
+    }
+  });
 
-    bot.command('start', async (ctx) => {
-      await ctx.reply(
-        `سلام ${ctx.from.first_name || ''}! 👋\nبه بات استعلام خاموشی برق گلستان خوش آمدید. ⚡️\n\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال فرمایید:`,
-        { parse_mode: 'HTML', reply_markup: getReplyKeyboard() }
-      );
+  bot.command(['bookmarks', 'bills', 'saved'], async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    const text = formatSavedBillsList(user.savedBills, user.activeBillId);
+    const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.command(['bookmark', 'save', 'add'], async (ctx) => {
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    if (parts.length === 0) {
+      await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
+      await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال کنید:');
+      return;
+    }
+    const rawBillId = parts[0];
+    const label = parts.slice(1).join(' ') || '';
+    const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
+    if (billId.length < 8 || billId.length > 15) {
+      await ctx.reply('❌ شناسه قبض باید بین ۸ تا ۱۵ رقم باشد.');
+      return;
+    }
+    const res = await storage.addBillId(ctx.from.id, billId, label);
+    const user = await storage.getUser(ctx.from.id);
+    await ctx.reply(
+      `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${res.label}</b> به نشان‌شده‌ها اضافه شد و به کیبورد شما افزوده شد!`,
+      { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(user.savedBills) }
+    );
+    await executeScheduleLookup(ctx, storage, billId, 'all');
+  });
+
+  bot.command('check', async (ctx) => {
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    if (parts.length === 0) {
+      await ctx.reply('لطفاً شناسه قبض را به همراه دستور ارسال کنید: <code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+      return;
+    }
+    const billId = toEnglishDigits(parts[0]).replace(/\D/g, '');
+    await executeScheduleLookup(ctx, storage, billId, 'all');
+  });
+
+  // Admin Commands
+  bot.command(['users', 'userlist', 'stats', 'admin'], async (ctx) => {
+    if (!isUserAdmin(env, ctx.from.id)) {
+      await ctx.reply('⛔️ شما دسترسی مدیریت برای اجرای این دستور را ندارید.');
+      return;
+    }
+    const stats = await storage.getStats();
+    const allUsers = await storage.getAllUsers();
+    let text = `📊 <b>آمار و گزارش کاربران ربات:</b>\n\n` +
+      `👥 <b>تعداد کل کاربران:</b> <code>${toPersianDigits(stats.totalUsers)}</code>\n` +
+      `🔖 <b>تعداد کل نشان‌ها:</b> <code>${toPersianDigits(stats.totalSavedBills)}</code>\n` +
+      `🔔 <b>کاربران با هشدار فعال:</b> <code>${toPersianDigits(stats.subscribedUsers)}</code>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `📋 <b>لیست کاربران استارت‌زده:</b>\n\n`;
+
+    allUsers.slice(0, 30).forEach((u, idx) => {
+      const name = u.firstName || 'بی‌نام';
+      const username = u.username ? `@${u.username}` : 'ندارد';
+      const billsCount = u.savedBills ? u.savedBills.length : 0;
+      const notifStatus = u.notifications?.enabled ? '🔔' : '🔕';
+      const joinDate = u.createdAt ? parseDateInfo(u.createdAt).jalaliStr : '-';
+      text += `${toPersianDigits(idx + 1)}. <b>${name}</b> (${username})\n` +
+        `   🆔 <code>${u.userId}</code> | 🔖 ${toPersianDigits(billsCount)} نشان | ${notifStatus}\n` +
+        `   📅 عضویت: ${toPersianDigits(joinDate)}\n\n`;
     });
 
-    bot.command('help', async (ctx) => {
-      await ctx.reply(
-        `📖 <b>راهنمای ربات:</b>\n\nبرای استعلام، شناسه قبض ۱۳ رقمی خود را ارسال کنید.`,
-        { parse_mode: 'HTML', reply_markup: getReplyKeyboard() }
-      );
-    });
+    if (allUsers.length > 30) text += `<i>... و ${toPersianDigits(allUsers.length - 30)} کاربر دیگر</i>\n`;
+    await ctx.reply(text, { parse_mode: 'HTML' });
+  });
 
-    bot.command('notice', async (ctx) => {
+  bot.command(['shout', 'broadcast', 'announce'], async (ctx) => {
+    if (!isUserAdmin(env, ctx.from.id)) {
+      await ctx.reply('⛔️ شما دسترسی مدیریت برای اجرای این دستور را ندارید.');
+      return;
+    }
+    const replyMsg = ctx.message.reply_to_message;
+    const textArg = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+    if (!replyMsg && !textArg) {
+      await ctx.reply(
+        `📢 <b>راهنمای ارسال همگانی (Shout):</b>\n\n` +
+        `• <b>روش اول:</b> دستور را همراه با متن پیام ارسال کنید:\n<code>/shout متن پیام شما...</code>\n\n` +
+        `• <b>روش دوم:</b> روی یک پیام ریپلای کرده و بنویسید <code>/shout</code>`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    const allUsers = await storage.getAllUsers();
+    const realUsers = allUsers.filter(u => u.userId !== '999888777');
+    const totalUsers = realUsers.length;
+    const statusMsg = await ctx.reply(`🚀 در حال ارسال پیام به <b>${toPersianDigits(totalUsers)}</b> کاربر...`, { parse_mode: 'HTML' });
+
+    let successCount = 0;
+    let blockedCount = 0;
+    let failedCount = 0;
+    const startTime = Date.now();
+
+    for (const u of realUsers) {
       try {
-        const notice = await fetchGopedNotice();
-        const text = (notice.Result || '').replace(/<[^>]+>/g, '').trim();
-        await ctx.reply(`📢 <b>اطلاعیه شرکت توزیع برق:</b>\n\n${text || 'اطلاعیه‌ای وجود ندارد.'}`, {
-          parse_mode: 'HTML',
-          reply_markup: getReplyKeyboard()
-        });
+        if (replyMsg) {
+          await ctx.api.copyMessage(u.userId, ctx.chat.id, replyMsg.message_id);
+        } else {
+          await ctx.api.sendMessage(u.userId, textArg, { parse_mode: 'HTML' });
+        }
+        successCount++;
       } catch (err) {
-        await ctx.reply(`❌ خطا در دریافت اطلاعیه: ${err.message}`);
+        if (err.description && (err.description.includes('bot was blocked') || err.description.includes('user is deactivated') || err.description.includes('chat not found'))) {
+          blockedCount++;
+        } else {
+          failedCount++;
+        }
       }
-    });
+      await new Promise(r => setTimeout(r, 45));
+    }
 
-    bot.command('check', async (ctx) => {
-      const parts = ctx.message.text.trim().split(/\s+/).slice(1);
-      if (parts.length === 0) {
-        await ctx.reply('لطفاً شناسه قبض را به همراه دستور ارسال کنید: <code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+    const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    const report = `📢 <b>گزارش ارسال همگانی (Shout):</b>\n\n` +
+      `👥 <b>کل مخاطبان:</b> <code>${toPersianDigits(totalUsers)}</code>\n` +
+      `✅ <b>ارسال موفق:</b> <code>${toPersianDigits(successCount)}</code>\n` +
+      `🚫 <b>بلاک / غیرفعال:</b> <code>${toPersianDigits(blockedCount)}</code>\n` +
+      `❌ <b>خطاهای دیگر:</b> <code>${toPersianDigits(failedCount)}</code>\n` +
+      `⏱ <b>مدت زمان:</b> <code>${toPersianDigits(durationSec)}</code> ثانیه`;
+
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, { parse_mode: 'HTML' }).catch(async () => {
+      await ctx.reply(report, { parse_mode: 'HTML' });
+    });
+  });
+
+  // Main Menu Buttons
+  bot.hears('⚡️ خاموشی امروز', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    if (!user.activeBillId) {
+      await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
+      return;
+    }
+    await executeScheduleLookup(ctx, storage, user.activeBillId, 'today');
+  });
+
+  bot.hears('🗓 خاموشی فردا', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    if (!user.activeBillId) {
+      await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
+      return;
+    }
+    await executeScheduleLookup(ctx, storage, user.activeBillId, 'tomorrow');
+  });
+
+  bot.hears('📋 کل برنامه هفتگی', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    if (!user.activeBillId) {
+      await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
+      return;
+    }
+    await executeScheduleLookup(ctx, storage, user.activeBillId, 'all');
+  });
+
+  bot.hears(['🔖 نشان‌شده‌های من', '📂 شناسه‌های من'], async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    const text = formatSavedBillsList(user.savedBills, user.activeBillId);
+    const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید'], async (ctx) => {
+    await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
+    await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
+  });
+
+  bot.hears('🔔 هشدار خودکار', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    const isEnabled = user.notifications?.enabled !== false;
+    const statusStr = isEnabled ? '🟢 فعال' : '🔴 غیرفعال';
+    const text = `🔔 <b>تنظیمات هشدار خودکار روزانه:</b>\n\n` +
+      `وضعیت فعلی: <b>${statusStr}</b>\n\n` +
+      `در صورت فعال بودن، هر روز صبح (ساعت ۸:۰۰) در صورتی که قطعی برق برای نشان‌های شما برنامه‌ریزی شده باشد، پیام هشدار دریافت خواهید کرد.`;
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getNotificationSettingsKeyboard(isEnabled) });
+  });
+
+  bot.hears('📢 اطلاعیه‌ها', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    try {
+      const notice = await fetchGopedNotice();
+      const text = (notice.Result || '').replace(/<br\s*[\/]?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+      await ctx.reply(`📢 <b>اطلاعیه شرکت توزیع برق:</b>\n\n${text || 'اطلاعیه‌ای وجود ندارد.'}`, {
+        parse_mode: 'HTML',
+        reply_markup: getMainReplyKeyboard(user.savedBills)
+      });
+    } catch (err) {
+      await ctx.reply(`❌ خطا در دریافت اطلاعیه: ${err.message}`);
+    }
+  });
+
+  bot.hears('ℹ️ راهنما', async (ctx) => {
+    const user = await storage.getUser(ctx.from.id);
+    const helpText = `📖 <b>راهنمای ربات:</b>\n\n` +
+      `⚡️ این ربات اطلاعات خاموشی را مستقیماً از سامانه رسمی شرکت توزیع نیروی برق استان گلستان (goped.ir) دریافت می‌کند.\n\n` +
+      `• برای استعلام، کافیست شناسه قبض خود را بنویسید و بفرستید.\n` +
+      `• می‌توانید چندین شناسه قبض (مثلاً خانه، مغازه، کارگاه) را نشان (Bookmark) کنید.\n` +
+      `• با فعال بودن هشدار روزانه، هر روز صبح در صورت خاموشی احتمالی، پیام یادآوری دریافت خواهید کرد.`;
+    await ctx.reply(helpText, { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(user.savedBills) });
+  });
+
+  // Message & State Handler
+  bot.on('message:text', async (ctx) => {
+    const text = ctx.message.text.trim();
+    const userId = ctx.from.id;
+    const user = await storage.getUser(userId);
+    const state = await storage.getState(userId);
+
+    // Dynamic bookmark button click
+    if (user.savedBills && user.savedBills.length > 0) {
+      const cleanText = text.replace(/^🔖\s*/, '').trim();
+      const matchedBookmark = user.savedBills.find(
+        b => b.label === cleanText || `🔖 ${b.label}` === text || b.billId === cleanText
+      );
+      if (matchedBookmark) {
+        await storage.setActiveBillId(userId, matchedBookmark.billId);
+        await executeScheduleLookup(ctx, storage, matchedBookmark.billId, 'all');
         return;
       }
-      const digits = toEnglishDigits(parts[0]).replace(/\D/g, '');
-      const data = await fetchGopedSchedule(digits);
-      const formatted = formatSchedule(data, 'all');
-      await ctx.reply(formatted, { parse_mode: 'HTML', reply_markup: getInlineButtons(digits, 'all') });
-    });
+    }
 
-    bot.hears('📢 اطلاعیه‌ها', async (ctx) => {
-      try {
-        const notice = await fetchGopedNotice();
-        const text = (notice.Result || '').replace(/<[^>]+>/g, '').trim();
-        await ctx.reply(`📢 <b>اطلاعیه شرکت توزیع برق:</b>\n\n${text || 'اطلاعیه‌ای وجود ندارد.'}`, {
-          parse_mode: 'HTML',
-          reply_markup: getReplyKeyboard()
-        });
-      } catch (err) {
-        await ctx.reply(`❌ خطا در دریافت اطلاعیه: ${err.message}`);
-      }
-    });
-
-    bot.hears('ℹ️ راهنما', async (ctx) => {
-      await ctx.reply(`⚡️ برای استعلام، کافیست شناسه قبض ۱۳ رقمی خود را بفرستید.`, { reply_markup: getReplyKeyboard() });
-    });
-
-    bot.on('callback_query:data', async (ctx) => {
-      const data = ctx.callbackQuery.data;
-      await ctx.answerCallbackQuery().catch(() => {});
-      if (data.startsWith('cf:')) {
-        const [, mode, billId] = data.split(':');
-        const sched = await fetchGopedSchedule(billId);
-        const text = formatSchedule(sched, mode === 'tom' ? 'tomorrow' : mode);
-        await ctx.editMessageText(text, {
-          parse_mode: 'HTML',
-          reply_markup: getInlineButtons(billId, mode === 'tom' ? 'tomorrow' : mode)
-        }).catch(async () => {
-          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getInlineButtons(billId, mode === 'tom' ? 'tomorrow' : mode) });
-        });
-      }
-    });
-
-    bot.on('message:text', async (ctx) => {
-      const text = ctx.message.text.trim();
-      const digits = toEnglishDigits(text).replace(/\D/g, '');
-
-      if (digits.length >= 8 && digits.length <= 15) {
-        try {
-          const data = await fetchGopedSchedule(digits);
-          const formatted = formatSchedule(data, 'all');
-          await ctx.reply(formatted, {
-            parse_mode: 'HTML',
-            reply_markup: getInlineButtons(digits, 'all')
-          });
-        } catch (err) {
-          await ctx.reply(`❌ خطا در دریافت اطلاعات از سامانه برق: ${err.message}`);
+    if (state) {
+      if (state.step === 'awaiting_bill_id') {
+        const billId = toEnglishDigits(text).replace(/\D/g, '');
+        if (billId.length < 8 || billId.length > 15) {
+          await ctx.reply('❌ شناسه قبض نامعتبر است. لطفاً شناسه قبض معتبر ارسال کنید:');
+          return;
         }
-      } else {
-        await ctx.reply('لطفاً یک شناسه قبض معتبر ارسال فرمایید.', { reply_markup: getReplyKeyboard() });
+        await storage.setState(userId, { step: 'awaiting_label', billId });
+        await ctx.reply(`برای شناسه <code>${toPersianDigits(billId)}</code> یک عنوان برای نشان بنویسید (مثلاً: 🏠 خانه):`, { parse_mode: 'HTML' });
+        return;
       }
-    });
 
+      if (state.step === 'awaiting_label') {
+        const billId = state.billId;
+        const label = text;
+        await storage.setState(userId, null);
+        await storage.addBillId(userId, billId, label);
+        const updatedUser = await storage.getUser(userId);
+        await ctx.reply(
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
+          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+        );
+        await executeScheduleLookup(ctx, storage, billId, 'all');
+        return;
+      }
+
+      if (state.step === 'awaiting_custom_save_label') {
+        const billId = state.billId;
+        const label = text;
+        await storage.setState(userId, null);
+        await storage.addBillId(userId, billId, label);
+        const updatedUser = await storage.getUser(userId);
+        await ctx.reply(
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> نشان شد!`,
+          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+        );
+        await executeScheduleLookup(ctx, storage, billId, 'all');
+        return;
+      }
+
+      if (state.step === 'awaiting_rename') {
+        const billId = state.billId;
+        const newLabel = text;
+        await storage.setState(userId, null);
+        await storage.renameBillId(userId, billId, newLabel);
+        const updatedUser = await storage.getUser(userId);
+        await ctx.reply(
+          `✏️ نام نشان با موفقیت به <b>${newLabel}</b> تغییر یافت!`,
+          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+        );
+        const listText = formatSavedBillsList(updatedUser.savedBills, updatedUser.activeBillId);
+        const kb = getSavedBillsInlineKeyboard(updatedUser.savedBills, updatedUser.activeBillId);
+        await ctx.reply(listText, { parse_mode: 'HTML', reply_markup: kb });
+        return;
+      }
+    }
+
+    const digitsOnly = toEnglishDigits(text).replace(/\D/g, '');
+    if (digitsOnly.length >= 8 && digitsOnly.length <= 15) {
+      await executeScheduleLookup(ctx, storage, digitsOnly, 'all');
+      return;
+    }
+
+    await ctx.reply(
+      '❓ متوجه دستور نشدم.\nبرای استعلام، لطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید یا از نشان‌های روی کیبورد انتخاب فرمایید.',
+      { reply_markup: getMainReplyKeyboard(user.savedBills) }
+    );
+  });
+
+  // Callbacks
+  bot.on('callback_query:data', async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    const userId = ctx.from.id;
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    if (data.startsWith('sched:')) {
+      const [, mode, billId] = data.split(':');
+      await executeScheduleLookup(ctx, storage, billId, mode === 'tom' ? 'tomorrow' : mode, true);
+      return;
+    }
+
+    if (data.startsWith('select_bill:')) {
+      const billId = data.replace('select_bill:', '');
+      await storage.setActiveBillId(userId, billId);
+      const user = await storage.getUser(userId);
+      const active = user.savedBills.find(b => b.billId === billId);
+      const label = active ? active.label : billId;
+      await ctx.reply(`⭐️ نشان <b>${label}</b> انتخاب شد:`, {
+        parse_mode: 'HTML',
+        reply_markup: getMainReplyKeyboard(user.savedBills)
+      });
+      await executeScheduleLookup(ctx, storage, billId, 'all');
+      return;
+    }
+
+    if (data.startsWith('save_prompt:')) {
+      const billId = data.replace('save_prompt:', '');
+      await storage.setState(userId, { step: 'awaiting_custom_save_label', billId });
+      await ctx.reply(`🏷 برای نشان کردن شناسه <code>${toPersianDigits(billId)}</code> یک نام دلخواه بفرستید (مثلاً: 🏠 خانه یا 🏢 محل کار):`, {
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    if (data.startsWith('rename_prompt:')) {
+      const billId = data.replace('rename_prompt:', '');
+      await storage.setState(userId, { step: 'awaiting_rename', billId });
+      await ctx.reply(`✏️ لطفاً نام جدید را برای این نشان وارد نمایید:`);
+      return;
+    }
+
+    if (data === 'rename_bill_menu') {
+      const user = await storage.getUser(userId);
+      if (user.savedBills.length === 0) {
+        await ctx.reply('نشانی برای تغییر نام وجود ندارد.');
+        return;
+      }
+      await ctx.editMessageText('✏️ نشان مورد نظر برای تغییر نام را انتخاب کنید:', {
+        reply_markup: getRenameBillsInlineKeyboard(user.savedBills)
+      }).catch(async () => {
+        await ctx.reply('✏️ نشان مورد نظر برای تغییر نام را انتخاب کنید:', {
+          reply_markup: getRenameBillsInlineKeyboard(user.savedBills)
+        });
+      });
+      return;
+    }
+
+    if (data === 'add_bill_prompt') {
+      await storage.setState(userId, { step: 'awaiting_bill_id' });
+      await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
+      return;
+    }
+
+    if (data === 'view_saved_bills') {
+      const user = await storage.getUser(userId);
+      const text = formatSavedBillsList(user.savedBills, user.activeBillId);
+      const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }).catch(async () => {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+      });
+      return;
+    }
+
+    if (data === 'delete_bill_menu') {
+      const user = await storage.getUser(userId);
+      if (user.savedBills.length === 0) {
+        await ctx.reply('نشانی برای حذف وجود ندارد.');
+        return;
+      }
+      await ctx.editMessageText('🗑 نشان مورد نظر برای حذف را انتخاب کنید:', {
+        reply_markup: getDeleteBillsInlineKeyboard(user.savedBills)
+      }).catch(async () => {
+        await ctx.reply('🗑 نشان مورد نظر برای حذف را انتخاب کنید:', {
+          reply_markup: getDeleteBillsInlineKeyboard(user.savedBills)
+        });
+      });
+      return;
+    }
+
+    if (data.startsWith('delete_bill_do:')) {
+      const billId = data.replace('delete_bill_do:', '');
+      await storage.removeBillId(userId, billId);
+      const user = await storage.getUser(userId);
+      await ctx.reply(`🗑 شناسه قبض <code>${toPersianDigits(billId)}</code> از نشان‌شده‌ها حذف شد.`, {
+        parse_mode: 'HTML',
+        reply_markup: getMainReplyKeyboard(user.savedBills)
+      });
+      const text = formatSavedBillsList(user.savedBills, user.activeBillId);
+      const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+      return;
+    }
+
+    if (data.startsWith('toggle_notifications:')) {
+      const enabled = data.split(':')[1] === '1';
+      await storage.setNotifications(userId, enabled);
+      const user = await storage.getUser(userId);
+      const statusText = enabled ? '✅ اطلاع‌رسانی خودکار روزانه فعال شد.' : '🔕 اطلاع‌رسانی خودکار غیرفعال شد.';
+      await ctx.reply(statusText, { reply_markup: getMainReplyKeyboard(user.savedBills) });
+      return;
+    }
+
+    if (data === 'back_to_main') {
+      const user = await storage.getUser(userId);
+      await ctx.reply('منوی اصلی:', { reply_markup: getMainReplyKeyboard(user.savedBills) });
+      return;
+    }
+  });
+
+  return { bot, storage };
+}
+
+async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEdit = false) {
+  const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
+  const user = await storage.getUser(ctx.from.id);
+  const savedItem = user.savedBills.find(b => b.billId === billId);
+  const customLabel = savedItem ? savedItem.label : '';
+  const isBookmarked = Boolean(savedItem);
+
+  let loadingMsg = null;
+  if (!isEdit) {
+    loadingMsg = await ctx.reply('⏳ در حال دریافت برنامه خاموشی از سامانه برق گلستان...').catch(() => null);
+  }
+
+  try {
+    const result = await fetchGopedSchedule(billId);
+    const text = formatScheduleMessage(result, mode, customLabel);
+    const replyMarkup = result.Code === 1 ? getScheduleInlineKeyboard(billId, mode, isBookmarked) : undefined;
+
+    if (isEdit && ctx.callbackQuery?.message) {
+      await ctx.editMessageText(text, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup
+      }).catch(async () => {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+      });
+    } else {
+      if (loadingMsg) {
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+      }
+      await ctx.reply(text, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup
+      });
+    }
+
+    if (result.Code === 1 && !user.activeBillId) {
+      await storage.addBillId(ctx.from.id, billId, 'قبض من');
+    }
+  } catch (err) {
+    const errText = `❌ خطا در دریافت اطلاعات:\n${err.message}`;
+    if (loadingMsg) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+    await ctx.reply(errText);
+  }
+}
+
+// ================= EXPORTS (WEBHOOK & SCHEDULED CRON) =================
+
+export default {
+  async fetch(request, env, ctx) {
+    const { bot } = createBot(env);
     return webhookCallback(bot, 'cloudflare-mod')(request);
+  },
+
+  async scheduled(event, env, ctx) {
+    console.log('[Cron] Running daily scheduled outage check on Cloudflare Workers...');
+    const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
+    const bot = new Bot(token);
+    const storage = new CloudflareStorage(env.POWERBOT_KV);
+
+    const todayGregorian = getIranGregorianDate(0);
+    const todayJalali = getTodayJalali(0);
+    const todayWeekday = getPersianWeekdayName(0);
+
+    const allUsers = await storage.getAllUsers();
+    const subscribed = allUsers.filter(u => u.notifications?.enabled && u.savedBills?.length > 0);
+    console.log(`[Cron] Checking ${subscribed.length} subscribed users for date ${todayJalali}`);
+
+    for (const user of subscribed) {
+      if (user.notifications.lastNotifiedDate === todayJalali) continue;
+
+      try {
+        let hasTodayOutage = false;
+        const alertMessages = [];
+
+        for (const savedBill of user.savedBills) {
+          const schedule = await fetchGopedSchedule(savedBill.billId);
+          if (schedule.Code !== 1 || !schedule.Result || !Array.isArray(schedule.Result.Blackouts)) continue;
+
+          const todayBlackouts = schedule.Result.Blackouts.filter(b => {
+            const info = parseDateInfo(b.Date || b.date);
+            return info.gregorianStr === todayGregorian || info.jalaliStr === todayJalali;
+          });
+
+          if (todayBlackouts.length > 0) {
+            hasTodayOutage = true;
+            let billBlock = `🏷 <b>${savedBill.label}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
+            todayBlackouts.forEach(b => {
+              billBlock += formatBlackoutCard(b, true, false) + '\n';
+            });
+            alertMessages.push(billBlock);
+          }
+          await new Promise(r => setTimeout(r, 600));
+        }
+
+        if (hasTodayOutage && alertMessages.length > 0) {
+          const fullAlert = `🚨 <b>هشدار خاموشی برق امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n` +
+            alertMessages.join('\n━━━━━━━━━━━━━━━━━━━━\n') +
+            `\n<i>⚠️ لطفاً اقدامات لازم جهت مدیریت مصرف و وسایل برقی را انجام دهید.</i>`;
+
+          await bot.api.sendMessage(user.userId, fullAlert, { parse_mode: 'HTML' });
+          user.notifications.lastNotifiedDate = todayJalali;
+          await storage.saveUser(user);
+          console.log(`[Cron] Notification sent to user ${user.userId}`);
+        }
+      } catch (err) {
+        console.error(`[Cron] Failed to notify user ${user.userId}:`, err.message);
+      }
+    }
   }
 };

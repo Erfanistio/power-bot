@@ -5,3 +5,10 @@ compatibility_date = "2024-09-23"
 [vars]
 BOT_TOKEN = "8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY"
 ADMIN_IDS = "7250238664"
+
+[[kv_namespaces]]
+binding = "POWERBOT_KV"
+id = "7c48dc0872fa49ebad02532e7d4c6260"
+
+[triggers]
+crons = ["30 4 * * *"]
