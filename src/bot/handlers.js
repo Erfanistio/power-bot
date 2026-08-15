@@ -32,6 +32,17 @@ function isUserAdmin(userId) {
 }
 
 /**
+ * Returns main reply keyboard ONLY if in private chat.
+ * In group chats, returns undefined so individual bookmarks are never sent to the group keyboard.
+ */
+function getPrivateReplyKeyboard(ctx, savedBills = []) {
+  if (ctx.chat && ctx.chat.type !== 'private') {
+    return undefined;
+  }
+  return getMainReplyKeyboard(savedBills);
+}
+
+/**
  * Registers all Telegram bot handlers and callbacks.
  * @param {import('grammy').Bot} bot
  */
@@ -53,7 +64,7 @@ export function registerBotHandlers(bot) {
     const welcome = formatWelcomeMessage(ctx.from.first_name);
     await ctx.reply(welcome, {
       parse_mode: 'HTML',
-      reply_markup: getMainReplyKeyboard(user.savedBills)
+      reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
     });
   });
 
@@ -68,7 +79,7 @@ export function registerBotHandlers(bot) {
       `5️⃣ <b>اطلاعیه‌ها:</b> مشاهده آخرین اخبار و اطلاعیه‌های رسمی شرکت توزیع با دکمه 📢 اطلاعیه‌ها.`;
     await ctx.reply(helpText, {
       parse_mode: 'HTML',
-      reply_markup: getMainReplyKeyboard(user.savedBills)
+      reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
     });
   });
 
@@ -105,7 +116,7 @@ export function registerBotHandlers(bot) {
     const user = db.getUser(ctx.from.id);
     await ctx.reply(
       `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${res.label}</b> به نشان‌شده‌ها اضافه شد و به کیبورد شما افزوده شد!`,
-      { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(user.savedBills) }
+      { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) }
     );
     await handleScheduleQuery(ctx, billId, 'all');
   });
@@ -168,7 +179,11 @@ export function registerBotHandlers(bot) {
     }
 
     const replyMsg = ctx.message.reply_to_message;
-    const textArg = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+    const rawText = ctx.message.text || '';
+    const textArg = rawText
+      .replace(/^\/(?:shout|broadcast|announce)(?:@\w+)?[\s\n]*/i, '')
+      .replace(/<br\s*[\/]?>/gi, '\n')
+      .trim();
 
     if (!replyMsg && !textArg) {
       await ctx.reply(
@@ -199,7 +214,11 @@ export function registerBotHandlers(bot) {
         if (replyMsg) {
           await ctx.api.copyMessage(u.userId, ctx.chat.id, replyMsg.message_id);
         } else {
-          await ctx.api.sendMessage(u.userId, textArg, { parse_mode: 'HTML' });
+          try {
+            await ctx.api.sendMessage(u.userId, textArg, { parse_mode: 'HTML' });
+          } catch {
+            await ctx.api.sendMessage(u.userId, textArg);
+          }
         }
         successCount++;
       } catch (err) {
@@ -282,7 +301,7 @@ export function registerBotHandlers(bot) {
       `• برای استعلام، کافیست شناسه قبض خود را بنویسید و بفرستید.\n` +
       `• می‌توانید چندین شناسه قبض (مثلاً خانه، مغازه، کارگاه) را نشان (Bookmark) کنید.\n` +
       `• با فعال بودن هشدار روزانه، هر روز صبح در صورت خاموشی احتمالی، پیام یادآوری دریافت خواهید کرد.`;
-    await ctx.reply(helpText, { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(user.savedBills) });
+    await ctx.reply(helpText, { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
   });
 
   // Handle Freeform Text (Bill IDs, Bookmark button clicks, States, etc.)
@@ -328,7 +347,7 @@ export function registerBotHandlers(bot) {
         const updatedUser = db.getUser(userId);
         await ctx.reply(
           `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
-          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+          { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         // Immediately fetch full schedule
         await handleScheduleQuery(ctx, billId, 'all');
@@ -343,7 +362,7 @@ export function registerBotHandlers(bot) {
         const updatedUser = db.getUser(userId);
         await ctx.reply(
           `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> نشان شد!`,
-          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+          { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         // Immediately fetch full schedule
         await handleScheduleQuery(ctx, billId, 'all');
@@ -358,7 +377,7 @@ export function registerBotHandlers(bot) {
         const updatedUser = db.getUser(userId);
         await ctx.reply(
           `✏️ نام نشان با موفقیت به <b>${newLabel}</b> تغییر یافت!`,
-          { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(updatedUser.savedBills) }
+          { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         await handleSavedBillsQuery(ctx);
         return;
@@ -375,7 +394,7 @@ export function registerBotHandlers(bot) {
     // Fallback response
     await ctx.reply(
       '❓ متوجه دستور نشدم.\nبرای استعلام، لطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید یا از نشان‌های روی کیبورد انتخاب فرمایید.',
-      { reply_markup: getMainReplyKeyboard(user.savedBills) }
+      { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) }
     );
   });
 
@@ -401,7 +420,7 @@ export function registerBotHandlers(bot) {
       const label = active ? active.label : billId;
       await ctx.reply(`⭐️ نشان <b>${label}</b> انتخاب شد:`, {
         parse_mode: 'HTML',
-        reply_markup: getMainReplyKeyboard(user.savedBills)
+        reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
       });
       await handleScheduleQuery(ctx, billId, 'all');
       return;
@@ -479,7 +498,7 @@ export function registerBotHandlers(bot) {
       const user = db.getUser(userId);
       await ctx.reply(`🗑 شناسه قبض <code>${toPersianDigits(billId)}</code> از نشان‌شده‌ها حذف شد.`, {
         parse_mode: 'HTML',
-        reply_markup: getMainReplyKeyboard(user.savedBills)
+        reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
       });
       await handleSavedBillsQuery(ctx);
       return;
@@ -491,14 +510,14 @@ export function registerBotHandlers(bot) {
       db.setNotifications(userId, enabled);
       const user = db.getUser(userId);
       const statusText = enabled ? '✅ اطلاع‌رسانی خودکار روزانه فعال شد.' : '🔕 اطلاع‌رسانی خودکار غیرفعال شد.';
-      await ctx.reply(statusText, { reply_markup: getMainReplyKeyboard(user.savedBills) });
+      await ctx.reply(statusText, { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
       return;
     }
 
     // Back to main
     if (data === 'back_to_main') {
       const user = db.getUser(userId);
-      await ctx.reply('منوی اصلی:', { reply_markup: getMainReplyKeyboard(user.savedBills) });
+      await ctx.reply('منوی اصلی:', { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
       return;
     }
   });
@@ -540,11 +559,6 @@ async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false)
         reply_markup: replyMarkup
       });
     }
-
-    // If billId not already in user's saved list, update activeBillId
-    if (result.success && !user.activeBillId) {
-      db.addBillId(ctx.from.id, billId, 'قبض من');
-    }
   } catch (err) {
     const errText = `❌ خطا در دریافت اطلاعات:\n${err.message}`;
     if (loadingMsg) {
@@ -564,7 +578,7 @@ async function handleNoticeQuery(ctx) {
     const notice = await gopedApi.getNotice();
     const text = formatNoticeMessage(notice);
     if (loading) await ctx.api.deleteMessage(ctx.chat.id, loading.message_id).catch(() => {});
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getMainReplyKeyboard(user.savedBills) });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
   } catch (err) {
     if (loading) await ctx.api.deleteMessage(ctx.chat.id, loading.message_id).catch(() => {});
     await ctx.reply('❌ خطا در دریافت اطلاعیه.');

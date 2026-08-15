@@ -68,12 +68,12 @@ export class OutageNotificationService {
         }
 
         if (hasTodayOutage && alertMessages.length > 0) {
-          const fullAlert = `🚨 <b>هشدار خاموشی برق امروز (${todayWeekday} - ${toPersianDigits(todayStr)}):</b>\n\n` +
+          const fullAlert = `🚨 <b>هشدار خاموشی برق امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n` +
             alertMessages.join('\n━━━━━━━━━━━━━━━━━━━━\n') +
             `\n<i>⚠️ لطفاً اقدامات لازم جهت مدیریت مصرف و وسایل برقی را انجام دهید.</i>`;
 
           await this.bot.api.sendMessage(user.userId, fullAlert, { parse_mode: 'HTML' });
-          db.setLastNotifiedDate(user.userId, todayStr);
+          db.setLastNotifiedDate(user.userId, todayJalali);
           console.log(`[Notifier] Alert sent to user ${user.userId}`);
         }
       } catch (err) {
