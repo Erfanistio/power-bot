@@ -3,5 +3,5 @@ main = "worker.js"
 compatibility_date = "2024-09-23"
 
 [vars]
-# You can set variables here or via `wrangler secret put BOT_TOKEN`
-# BOT_TOKEN = "your_bot_token"
+BOT_TOKEN = "8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY"
+ADMIN_IDS = "7250238664"
