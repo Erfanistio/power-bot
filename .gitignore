@@ -12,6 +12,7 @@ data/
 *.sqlite
 *.db
 
-# OS files
-.DS_Store
-Thumbs.db
+# Wrangler
+.wrangler/
+cf-worker/.wrangler/
+

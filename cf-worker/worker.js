@@ -1,5 +1,5 @@
 /**
- * Full Cloudflare Worker for Golestan Electricity Outage Telegram Bot
+ * Cloudflare Worker for Golestan Electricity Outage Telegram Bot
  * Runs 100% serverless on Cloudflare Workers with Cloudflare KV storage
  * and Cloudflare Cron Triggers for daily automated outage alerts.
  */
@@ -98,28 +98,48 @@ function isUserAdmin(env, userId) {
 async function fetchGopedSchedule(billId) {
   const cleanId = toEnglishDigits(billId).replace(/\D/g, '');
   const url = `${GOPED_API_URL}Api/GetSchedule_Web?BillId=${encodeURIComponent(cleanId)}`;
-  const res = await fetch(url, {
-    headers: {
-      'Auth-Token': GOPED_AUTH_TOKEN,
-      'User-Agent': 'Mozilla/5.0 (CF-Worker; PowerBot)',
-      'Accept': 'application/json'
-    }
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'Auth-Token': GOPED_AUTH_TOKEN,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 async function fetchGopedNotice() {
   const url = `${GOPED_API_URL}Api/GetNotice`;
-  const res = await fetch(url, {
-    headers: {
-      'Auth-Token': GOPED_AUTH_TOKEN,
-      'User-Agent': 'Mozilla/5.0 (CF-Worker; PowerBot)',
-      'Accept': 'application/json'
-    }
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'Auth-Token': GOPED_AUTH_TOKEN,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; TelegramBot)',
+        'Accept': 'application/json'
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 // ================= CLOUDFLARE KV DATABASE =================
@@ -974,11 +994,6 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
   const customLabel = savedItem ? savedItem.label : '';
   const isBookmarked = Boolean(savedItem);
 
-  let loadingMsg = null;
-  if (!isEdit) {
-    loadingMsg = await ctx.reply('⏳ در حال دریافت برنامه خاموشی از سامانه برق گلستان...').catch(() => null);
-  }
-
   try {
     const result = await fetchGopedSchedule(billId);
     const text = formatScheduleMessage(result, mode, customLabel);
@@ -992,9 +1007,6 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
         await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
       });
     } else {
-      if (loadingMsg) {
-        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
-      }
       await ctx.reply(text, {
         parse_mode: 'HTML',
         reply_markup: replyMarkup
@@ -1006,9 +1018,6 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
     }
   } catch (err) {
     const errText = `❌ خطا در دریافت اطلاعات:\n${err.message}`;
-    if (loadingMsg) {
-      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
-    }
     await ctx.reply(errText);
   }
 }
@@ -1017,6 +1026,22 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
 
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/test-api') {
+      try {
+        const billId = url.searchParams.get('billId') || '6357330214322';
+        const data = await fetchGopedSchedule(billId);
+        return new Response(JSON.stringify(data, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message, stack: e.stack }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     const { bot } = createBot(env);
     return webhookCallback(bot, 'cloudflare-mod')(request);
   },
