@@ -19,17 +19,40 @@ class JsonDatabase {
         fs.mkdirSync(dir, { recursive: true });
       }
 
+      // Check available seed locations (not shadowed by volume mount)
+      const possibleSeeds = [
+        path.resolve('/app/seed-data/database.json'),
+        path.resolve('./seed-data/database.json'),
+        path.resolve('./data/database.json')
+      ];
+      const validSeedPath = possibleSeeds.find(p => p !== this.filePath && fs.existsSync(p));
+
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, 'utf8');
         this.data = JSON.parse(raw);
         if (!this.data.users) this.data.users = {};
+
+        // If mounted volume has fewer users than bundled seed, auto-merge seed data
+        if (validSeedPath && Object.keys(this.data.users).length < 40) {
+          try {
+            const rawSeed = fs.readFileSync(validSeedPath, 'utf8');
+            const seedObj = JSON.parse(rawSeed);
+            if (seedObj && seedObj.users) {
+              const beforeCount = Object.keys(this.data.users).length;
+              this.data.users = { ...seedObj.users, ...this.data.users };
+              console.log(`[Database] Auto-merged seed data from ${validSeedPath}! (Users: ${beforeCount} -> ${Object.keys(this.data.users).length})`);
+              this._save();
+            }
+          } catch (seedErr) {
+            console.error('[Database] Seed merge notice:', seedErr.message);
+          }
+        }
         console.log(`[Database] Loaded ${Object.keys(this.data.users).length} users from: ${this.filePath}`);
       } else {
-        // Look for bundled seed database if custom volume path is newly mounted and empty
-        const defaultSeedPath = path.resolve('./data/database.json');
-        if (this.filePath !== defaultSeedPath && fs.existsSync(defaultSeedPath)) {
-          console.log(`[Database] Initializing new database from seed: ${defaultSeedPath}`);
-          const rawSeed = fs.readFileSync(defaultSeedPath, 'utf8');
+        // Initialize new database from seed
+        if (validSeedPath) {
+          console.log(`[Database] Initializing new database from seed: ${validSeedPath}`);
+          const rawSeed = fs.readFileSync(validSeedPath, 'utf8');
           this.data = JSON.parse(rawSeed);
           if (!this.data.users) this.data.users = {};
         }

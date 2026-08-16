@@ -10,7 +10,8 @@ RUN npm ci --omit=dev
 # Copy application source and seed database
 COPY . .
 
-# Ensure data directory exists
+# Copy seed data to a separate directory so it survives volume mounts
+RUN mkdir -p /app/seed-data && cp -r /app/data/* /app/seed-data/ || true
 RUN mkdir -p /app/data
 
 # Environment configuration
