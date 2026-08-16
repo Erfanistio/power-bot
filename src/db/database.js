@@ -234,6 +234,20 @@ class JsonDatabase {
     return Object.keys(this.data.users).length;
   }
 
+  getAllUniqueSavedBills() {
+    const map = new Map();
+    Object.values(this.data.users).forEach(u => {
+      if (Array.isArray(u.savedBills)) {
+        u.savedBills.forEach(b => {
+          if (b.billId && !map.has(b.billId)) {
+            map.set(b.billId, b);
+          }
+        });
+      }
+    });
+    return Array.from(map.values());
+  }
+
   getStats() {
     const allUsers = Object.values(this.data.users);
     let totalSavedBills = 0;
