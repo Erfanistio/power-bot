@@ -5,35 +5,21 @@ export class GopedApiClient {
   constructor(baseUrl = config.apiUrl, authToken = config.authToken, timeoutMs = config.apiTimeoutMs) {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     this.authToken = authToken;
-    this.timeoutMs = timeoutMs || 15000;
-    // In-memory cache: billId -> { timestamp, data }
-    this._scheduleCache = new Map();
-    this._noticeCache = null;
-    this.cacheTtlMs = 20 * 60 * 1000; // 20 minutes cache TTL for fast responses
-    this.noticeTtlMs = 15 * 60 * 1000; // 15 minutes notice TTL
+    this.timeoutMs = timeoutMs || 45000;
   }
 
   /**
-   * Proactively warm up cache for a list of bill IDs in parallel (non-blocking).
+   * No cache - always returns false.
    */
-  warmupBills(rawBillIds = []) {
-    if (!Array.isArray(rawBillIds) || rawBillIds.length === 0) return;
-    for (const rawId of rawBillIds) {
-      const billId = this.cleanBillId(rawId);
-      if (billId && !this.hasFreshCache(billId)) {
-        this.getSchedule(billId, false).catch(() => {});
-      }
-    }
+  hasFreshCache() {
+    return false;
   }
 
   /**
-   * Checks if valid unexpired cache is available for this bill.
+   * No-op warmup since caching is disabled.
    */
-  hasFreshCache(rawBillId) {
-    const billId = this.cleanBillId(rawBillId);
-    const cached = this._scheduleCache.get(billId);
-    if (!cached || !cached.data) return false;
-    return (Date.now() - cached.timestamp < this.cacheTtlMs);
+  warmupBills() {
+    // No-op
   }
 
   /**
@@ -48,6 +34,9 @@ export class GopedApiClient {
   /**
    * Clears the in-memory cache.
    */
+  clearCache() {
+    // No-op
+  }
   clearCache(billId = null) {
     if (billId) {
       this._scheduleCache.delete(this.cleanBillId(billId));
@@ -108,7 +97,7 @@ export class GopedApiClient {
    * @param {string} rawBillId - Electricity Bill ID (شناسه قبض)
    * @param {boolean} forceFresh - If true, bypass cache and fetch directly from GOPED API
    */
-  async getSchedule(rawBillId, forceFresh = false) {
+  async getSchedule(rawBillId) {
     const billId = this.cleanBillId(rawBillId);
     if (!billId) {
       return {
@@ -117,13 +106,6 @@ export class GopedApiClient {
         message: 'شناسه قبض وارد نشده یا نامعتبر است.',
         blackouts: []
       };
-    }
-
-    // Check cache if not forcing fresh request
-    const now = Date.now();
-    const cached = this._scheduleCache.get(billId);
-    if (!forceFresh && cached && (now - cached.timestamp < this.cacheTtlMs)) {
-      return { ...cached.data, fromCache: true };
     }
 
     try {
@@ -181,24 +163,7 @@ export class GopedApiClient {
         persianDateLastBlackout: result.PersianDateLastBlackout || ''
       };
 
-      // Save in cache
-      this._scheduleCache.set(billId, {
-        timestamp: now,
-        data: formattedResult
-      });
-
       return formattedResult;
-    } catch (err) {
-      // If live request failed but we have stale cache, return it with a notice
-      if (cached && cached.data) {
-        return {
-          ...cached.data,
-          fromCache: true,
-          isStale: true,
-          warningMessage: '⚠️ سرور پاسخ نداد؛ اطلاعات نمایش داده شده مربوط به آخرین استعلام قبلی است.'
-        };
-      }
-
       return {
         success: false,
         code: -500,

@@ -1366,17 +1366,16 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Ultra-Fast Cached GOPED API Proxy for Railway
+    // Direct Real-time Live GOPED API Proxy (No Cache)
     if (url.pathname === '/api/schedule' || url.pathname === '/Api/GetSchedule_Web' || url.pathname === '/test-api') {
       try {
         const billId = url.searchParams.get('billId') || url.searchParams.get('BillId') || '6357330214322';
-        const force = url.searchParams.get('force') === 'true';
-        const storage = new CloudflareStorage(env.POWERBOT_KV);
-        const data = await fetchGopedSchedule(billId, force, storage);
+        const data = await fetchGopedSchedule(billId, true, null);
         return new Response(JSON.stringify(data, null, 2), {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
-            'Access-Control-Allow-Origin': '*'
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store, no-cache, must-revalidate'
           }
         });
       } catch (e) {
