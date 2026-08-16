@@ -6,8 +6,9 @@ node_modules/
 .env.local
 .env.production
 
-# Database & runtime data
-data/
+# Runtime temp and backup files
+data/*.tmp
+data/*.backup.json
 *.log
 *.sqlite
 *.db

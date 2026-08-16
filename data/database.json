@@ -1,0 +1,852 @@
+{
+  "users": {
+    "106370451": {
+      "userId": "106370451",
+      "username": "amirhajilari",
+      "firstName": "Amir",
+      "savedBills": [
+        {
+          "billId": "7155994714324",
+          "label": "باشگاه",
+          "addedAt": "2026-08-15T15:39:17.419Z"
+        },
+        {
+          "billId": "6013452914324",
+          "label": "خونه ویلاشهر",
+          "addedAt": "2026-08-15T15:39:17.420Z"
+        },
+        {
+          "billId": "2409511814327",
+          "label": "خونه ملل",
+          "addedAt": "2026-08-15T15:39:17.420Z"
+        },
+        {
+          "billId": "6121607314326",
+          "label": "خونه پایین",
+          "addedAt": "2026-08-15T15:39:17.420Z"
+        }
+      ],
+      "activeBillId": "7155994714324",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-09T09:55:23.351Z",
+      "updatedAt": "2026-08-15T21:17:47.844Z"
+    },
+    "106556006": {
+      "userId": "106556006",
+      "username": "Mohammad_amin87",
+      "firstName": "•Mohammad Amin•",
+      "savedBills": [
+        {
+          "billId": "6189050514320",
+          "label": "خانه ۱",
+          "addedAt": "2026-08-15T21:28:33.026Z"
+        }
+      ],
+      "activeBillId": "6189050514320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T21:18:19.073Z",
+      "updatedAt": "2026-08-15T21:28:42.990Z"
+    },
+    "122576978": {
+      "userId": "122576978",
+      "username": "Kooroshsh79",
+      "firstName": "KOOROSH",
+      "savedBills": [
+        {
+          "billId": "6121607314326",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:41.387Z"
+        }
+      ],
+      "activeBillId": "6121607314326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-08T09:50:18.278Z",
+      "updatedAt": "2026-08-16T08:34:31.298Z"
+    },
+    "246821474": {
+      "userId": "246821474",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "7148768714323",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:43.669Z"
+        }
+      ],
+      "activeBillId": "7148768714323",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:43.669Z",
+      "updatedAt": "2026-08-15T15:39:43.669Z"
+    },
+    "445438045": {
+      "userId": "445438045",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6237784414320",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:43.918Z"
+        }
+      ],
+      "activeBillId": "6237784414320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-10T11:12:02.667Z",
+      "updatedAt": "2026-08-15T15:39:13.441Z"
+    },
+    "964229034": {
+      "userId": "964229034",
+      "username": "Radinshams",
+      "firstName": "Radin",
+      "savedBills": [
+        {
+          "billId": "2446156414323",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:54.332Z"
+        }
+      ],
+      "activeBillId": "2446156414323",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-12T12:04:13.989Z",
+      "updatedAt": "2026-08-15T21:35:39.627Z"
+    },
+    "999888777": {
+      "userId": "999888777",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "1234567890123",
+          "label": "🏠 خانه تستی",
+          "addedAt": "2026-08-15T14:27:34.932Z"
+        }
+      ],
+      "activeBillId": "1234567890123",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T14:27:34.931Z",
+      "updatedAt": "2026-08-15T14:27:34.931Z"
+    },
+    "1079060877": {
+      "userId": "1079060877",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6038781814325",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:41.147Z"
+        }
+      ],
+      "activeBillId": "6038781814325",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:41.147Z",
+      "updatedAt": "2026-08-15T15:39:41.147Z"
+    },
+    "1236870901": {
+      "userId": "1236870901",
+      "username": "JoKeR_867",
+      "firstName": "•°¯`•• 𝐣๏ҜẸя ••´¯°•",
+      "savedBills": [
+        {
+          "billId": "2211694014320",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:17.660Z"
+        }
+      ],
+      "activeBillId": "2211694014320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-13T07:45:08.694Z",
+      "updatedAt": "2026-08-16T03:46:32.385Z"
+    },
+    "1486304961": {
+      "userId": "1486304961",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6033903114328",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:41.974Z"
+        }
+      ],
+      "activeBillId": "6033903114328",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:41.974Z",
+      "updatedAt": "2026-08-15T15:39:41.974Z"
+    },
+    "1942582991": {
+      "userId": "1942582991",
+      "username": "ab0llfawzli",
+      "firstName": "-𝐀𝐁𝐎𝐋 🐊",
+      "savedBills": [
+        {
+          "billId": "6207717414328",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:42.664Z"
+        },
+        {
+          "billId": "6178544214328",
+          "label": "ایثار",
+          "addedAt": "2026-08-16T04:42:11.125Z"
+        }
+      ],
+      "activeBillId": "6178544214328",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-09T10:56:13.741Z",
+      "updatedAt": "2026-08-16T04:42:11.125Z"
+    },
+    "1953685601": {
+      "userId": "1953685601",
+      "username": "Plicet",
+      "firstName": "ariyo",
+      "savedBills": [
+        {
+          "billId": "6186521714326",
+          "label": "خانه",
+          "addedAt": "2026-08-15T21:30:17.042Z"
+        }
+      ],
+      "activeBillId": "6186521714326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T21:23:55.243Z",
+      "updatedAt": "2026-08-15T22:25:24.969Z"
+    },
+    "1976432801": {
+      "userId": "1976432801",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "9895834702126",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:43.416Z"
+        }
+      ],
+      "activeBillId": "9895834702126",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:43.416Z",
+      "updatedAt": "2026-08-15T15:39:43.416Z"
+    },
+    "7250238664": {
+      "userId": "7250238664",
+      "username": "UnfortunatelyErfan",
+      "firstName": "𝖤𝗋𝖿𝖺𝗇",
+      "savedBills": [
+        {
+          "billId": "6357330214322",
+          "label": "خونه",
+          "addedAt": "2026-08-15T21:30:19.893Z"
+        }
+      ],
+      "activeBillId": "6357330214322",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T14:30:29.256Z",
+      "updatedAt": "2026-08-16T12:28:08.725Z"
+    },
+    "5127176350": {
+      "userId": "5127176350",
+      "username": "sajadjinjiu",
+      "firstName": "Sajad",
+      "savedBills": [
+        {
+          "billId": "2649751514321",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:33:38.281Z"
+        }
+      ],
+      "activeBillId": "2649751514321",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:32:51.335Z",
+      "updatedAt": "2026-08-16T12:18:15.325Z"
+    },
+    "5177174339": {
+      "userId": "5177174339",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6251767014320",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:44.400Z"
+        }
+      ],
+      "activeBillId": "6251767014320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-07-30T11:50:10.834Z",
+      "updatedAt": "2026-08-15T15:39:13.938Z"
+    },
+    "5333677908": {
+      "userId": "5333677908",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6609388314326",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:18.124Z"
+        }
+      ],
+      "activeBillId": "6609388314326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-05T09:00:51.844Z",
+      "updatedAt": "2026-08-15T15:39:14.153Z"
+    },
+    "5735122485": {
+      "userId": "5735122485",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "2560769414323",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:18.370Z"
+        }
+      ],
+      "activeBillId": "2560769414323",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-02T16:57:26.481Z",
+      "updatedAt": "2026-08-15T15:39:14.371Z"
+    },
+    "6008614765": {
+      "userId": "6008614765",
+      "username": "I2oham",
+      "firstName": "Sirroham",
+      "savedBills": [
+        {
+          "billId": "2145764714321",
+          "label": "خانه مادر بزرگ",
+          "addedAt": "2026-08-15T15:39:18.626Z"
+        }
+      ],
+      "activeBillId": "2145764714321",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-01T14:06:22.408Z",
+      "updatedAt": "2026-08-16T10:20:21.708Z"
+    },
+    "6033464836": {
+      "userId": "6033464836",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "7150302014326",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:18.864Z"
+        }
+      ],
+      "activeBillId": "7150302014326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-01T11:02:44.522Z",
+      "updatedAt": "2026-08-15T15:39:14.839Z"
+    },
+    "6088703005": {
+      "userId": "6088703005",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6163732014320",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:19.093Z"
+        }
+      ],
+      "activeBillId": "6163732014320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-09T08:44:39.711Z",
+      "updatedAt": "2026-08-15T15:39:15.063Z"
+    },
+    "6191298460": {
+      "userId": "6191298460",
+      "username": "R_W1n",
+      "firstName": "RW",
+      "savedBills": [
+        {
+          "billId": "6088071914328",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:19.326Z"
+        }
+      ],
+      "activeBillId": "6088071914328",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-10T09:32:21.671Z",
+      "updatedAt": "2026-08-15T21:16:18.617Z"
+    },
+    "6434077391": {
+      "userId": "6434077391",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6362973114329",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:48.174Z"
+        }
+      ],
+      "activeBillId": "6362973114329",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-07-31T07:27:19.653Z",
+      "updatedAt": "2026-08-15T15:39:15.530Z"
+    },
+    "6570909652": {
+      "userId": "6570909652",
+      "username": "Retard_minded_Adrin",
+      "firstName": "Adrin",
+      "savedBills": [
+        {
+          "billId": "6556884514320",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:19.599Z"
+        }
+      ],
+      "activeBillId": "6556884514320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-06T05:23:17.255Z",
+      "updatedAt": "2026-08-16T06:24:42.247Z"
+    },
+    "7199474719": {
+      "userId": "7199474719",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6081163614326",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:50.774Z"
+        }
+      ],
+      "activeBillId": "6081163614326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-13T06:58:38.296Z",
+      "updatedAt": "2026-08-15T15:39:16.007Z"
+    },
+    "8070052902": {
+      "userId": "8070052902",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6686532014329",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:53.573Z"
+        }
+      ],
+      "activeBillId": "6686532014329",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-11T21:50:45.911Z",
+      "updatedAt": "2026-08-15T15:39:16.463Z"
+    },
+    "8485669168": {
+      "userId": "8485669168",
+      "username": "SALKAZA",
+      "firstName": "sᴀʟɪᴍ",
+      "savedBills": [
+        {
+          "billId": "6609388314326",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:53.797Z"
+        }
+      ],
+      "activeBillId": "6609388314326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-05T08:42:29.847Z",
+      "updatedAt": "2026-08-16T10:34:22.806Z"
+    },
+    "8518744324": {
+      "userId": "8518744324",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6354193114324",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:20.571Z"
+        }
+      ],
+      "activeBillId": "6354193114324",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-06T20:29:39.534Z",
+      "updatedAt": "2026-08-15T15:39:16.925Z"
+    },
+    "6694056988": {
+      "userId": "6694056988",
+      "username": "MJ3088",
+      "firstName": "Mahdiar",
+      "savedBills": [
+        {
+          "billId": "7480621014320",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:19.843Z"
+        }
+      ],
+      "activeBillId": "7480621014320",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:19.842Z",
+      "updatedAt": "2026-08-15T21:23:55.831Z"
+    },
+    "7130015370": {
+      "userId": "7130015370",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6265131814327",
+          "label": "خانه",
+          "addedAt": "2026-08-15T15:39:20.069Z"
+        }
+      ],
+      "activeBillId": "6265131814327",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:20.069Z",
+      "updatedAt": "2026-08-15T15:39:20.069Z"
+    },
+    "5514090429": {
+      "userId": "5514090429",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6295965714326",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:44.903Z"
+        }
+      ],
+      "activeBillId": "6295965714326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:44.903Z",
+      "updatedAt": "2026-08-15T15:39:44.903Z"
+    },
+    "5709123844": {
+      "userId": "5709123844",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6060300614323",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:46.146Z"
+        }
+      ],
+      "activeBillId": "6060300614323",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:46.146Z",
+      "updatedAt": "2026-08-15T15:39:46.146Z"
+    },
+    "6033065700": {
+      "userId": "6033065700",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6051842414321",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:46.992Z"
+        }
+      ],
+      "activeBillId": "6051842414321",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:46.992Z",
+      "updatedAt": "2026-08-15T15:39:46.992Z"
+    },
+    "6436213476": {
+      "userId": "6436213476",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "7457517014325",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:48.501Z"
+        }
+      ],
+      "activeBillId": "7457517014325",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:48.501Z",
+      "updatedAt": "2026-08-15T15:39:48.501Z"
+    },
+    "6452918372": {
+      "userId": "6452918372",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6319388714326",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:48.759Z"
+        }
+      ],
+      "activeBillId": "6319388714326",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:48.759Z",
+      "updatedAt": "2026-08-15T15:39:48.759Z"
+    },
+    "6538197356": {
+      "userId": "6538197356",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "1234567891011",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:49.197Z"
+        }
+      ],
+      "activeBillId": "1234567891011",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:49.197Z",
+      "updatedAt": "2026-08-15T15:39:49.197Z"
+    },
+    "7304365548": {
+      "userId": "7304365548",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6582395014324",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:51.857Z"
+        }
+      ],
+      "activeBillId": "6582395014324",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:51.857Z",
+      "updatedAt": "2026-08-15T15:39:51.857Z"
+    },
+    "7428804338": {
+      "userId": "7428804338",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "1585845263258",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:52.804Z"
+        }
+      ],
+      "activeBillId": "1585845263258",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:52.804Z",
+      "updatedAt": "2026-08-15T15:39:52.804Z"
+    },
+    "7510104708": {
+      "userId": "7510104708",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "2192696514325",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:53.071Z"
+        }
+      ],
+      "activeBillId": "2192696514325",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:53.071Z",
+      "updatedAt": "2026-08-15T15:39:53.071Z"
+    },
+    "7747174973": {
+      "userId": "7747174973",
+      "username": "",
+      "firstName": "",
+      "savedBills": [
+        {
+          "billId": "6498274514329",
+          "label": "خونه",
+          "addedAt": "2026-08-15T15:39:53.333Z"
+        }
+      ],
+      "activeBillId": "6498274514329",
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T15:39:53.333Z",
+      "updatedAt": "2026-08-15T15:39:53.333Z"
+    },
+    "5780134362": {
+      "userId": "5780134362",
+      "username": "Aro1945",
+      "firstName": "Aryan",
+      "savedBills": [],
+      "activeBillId": null,
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-16T02:55:43.426Z",
+      "updatedAt": "2026-08-16T02:55:43.472Z"
+    },
+    "6145035621": {
+      "userId": "6145035621",
+      "username": "Tivan_Karbalaii_Abbasi",
+      "firstName": "T1",
+      "savedBills": [],
+      "activeBillId": null,
+      "notifications": {
+        "enabled": true,
+        "time": "08:00",
+        "lastNotifiedDate": null
+      },
+      "createdAt": "2026-08-15T22:40:12.640Z",
+      "updatedAt": "2026-08-15T22:40:12.691Z"
+    }
+  }
+}

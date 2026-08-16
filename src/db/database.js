@@ -21,10 +21,10 @@ class JsonDatabase {
 
       // Check available seed locations (not shadowed by volume mount)
       const possibleSeeds = [
+        path.resolve('/app/seed/database.json'),
+        path.resolve('./seed/database.json'),
         '/app/seed-database.json',
         path.resolve('./seed-database.json'),
-        path.resolve('/app/seed-data/database.json'),
-        path.resolve('./seed-data/database.json'),
         path.resolve('./data/database.json')
       ];
       const validSeedPath = possibleSeeds.find(p => p !== this.filePath && fs.existsSync(p));
