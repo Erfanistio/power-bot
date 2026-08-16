@@ -49,10 +49,38 @@ BOT_TOKEN=توکن_ربات_شما
 
 ## 💻 روش‌های اجرا
 
-### روش اول: اجرای مستقیم با Node.js
+### روش اول: استقرار ابری روی Railway 🚂 (پیشنهادی)
+
+پروژه به صورت کامل برای استقرار روی پلتفرم **Railway** بهینه‌سازی شده است:
+
+1. **پوش کردن به گیت‌هاب:** مخزن را در اکانت گیت‌هاب خود Push کنید.
+2. **ایجاد پروژه جدید در Railway:**
+   - وارد [Railway.app](https://railway.app) شوید.
+   - روی **New Project** و سپس **Deploy from GitHub repo** کلیک کنید و مخزن را انتخاب نمایید.
+3. **تنظیم متغیرهای محیطی (Variables):**
+   - در داشبورد سرویس، وارد تب **Variables** شوید و مقادیر زیر را وارد کنید:
+     ```env
+     BOT_TOKEN=8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY
+     ADMIN_IDS=7250238664
+     NOTIFICATION_CRON=0 8 * * *
+     DB_FILE_PATH=/app/data/database.json
+     PORT=3000
+     ```
+4. **اتصال Volume برای ذخیره دائمی دیتا (Persistent Storage):**
+   - در داشبورد سرویس، به تب **Volumes** بروید و روی **Add Volume** کلیک کنید.
+   - مسیر مانت (Mount Path) را روی `/app/data` بگذارید. (با این کار حتی در صورت ری‌استارت یا دیپلوی مجدد، دیتابیس کاربران و نشان‌ها هرگز پاک نخواهد شد).
+5. **بررسی سلامت ربات:**
+   - اندپوینت Health Check روی پورت ۳۰۰۰ به صورت خودکار فعال بوده و مسیر `/health` و `/stats` وضعیت آنلاین بودن ربات و تعداد کاربران را نمایش می‌دهد.
+
+---
+
+### روش دوم: اجرای مستقیم با Node.js
 ```bash
 # نصب وابستگی‌ها
 npm install
+
+# مشاهده آمار دیتابیس
+npm run db:stats
 
 # اجرای تست‌ها برای اطمینان از سلامت اتصال به API
 npm test
@@ -64,29 +92,26 @@ npm start
 npm run dev
 ```
 
-### روش دوم: اجرا با Docker و Docker Compose
+### روش سوم: اجرا با Docker و Docker Compose
 ```bash
 docker compose up -d --build
 ```
 
-### روش سوم: اجرا روی Cloudflare Workers (بدون سرور)
-اگر تمایل دارید ربات را روی کلادفلر ورکرز مستقر کنید:
+### روش چهارم: اجرا روی Cloudflare Workers (سرورلس)
+ربات به صورت سرورلس روی Cloudflare Workers با حافظه KV نیز قابل استقرار است:
+
 ```bash
-cd cf-worker
-npm install wrangler -g
+# استقرار یا بروزرسانی ربات روی کلادفلر
+npm run cf:deploy
 
-# لاگین در اکانت کلادفلر
-wrangler login
+# تنظیم خودکار وب‌هوک و منوی دستورات تلگرام
+npm run cf:setup
 
-# تنظیم توکن ربات به عنوان سکرت
-wrangler secret put BOT_TOKEN
+# مشاهده وضعیت لحظه‌ای وب‌هوک، مشخصات ربات و آمار کاربران
+npm run cf:status
 
-# انتشار ورکر
-wrangler deploy
-```
-سپس وب‌هوک تلگرام را با آدرس ورکر خود ست کنید:
-```
-https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER_SUBDOMAIN>.workers.dev
+# مشاهده لاگ‌های زنده ورکر
+npm run cf:logs
 ```
 
 ---

@@ -908,6 +908,29 @@ function createBot(env, executionCtx = null) {
     }
   });
 
+  // /testnotif and /runnotif admin command
+  bot.command(['testnotif', 'runnotif', 'checknotif'], async (ctx) => {
+    if (!isUserAdmin(env, ctx.from.id)) {
+      await ctx.reply('⛔️ شما دسترسی مدیریت برای اجرای این دستور را ندارید.');
+      return;
+    }
+
+    const statusMsg = await ctx.reply('⏳ در حال بررسی و تست ارسال اعلانات روزانه...');
+    const result = await runScheduledNotifications(env, bot, storage, true);
+
+    const report = `🔔 <b>گزارش اجرای تست اعلان خاموشی (Cloudflare):</b>\n\n` +
+      `📅 <b>تاریخ:</b> ${toPersianDigits(result.dateJalali)}\n` +
+      `👥 <b>کاربران بررسی‌شده:</b> <code>${toPersianDigits(result.totalChecked)}</code>\n` +
+      `📨 <b>پیام‌های ارسال‌شده:</b> <code>${toPersianDigits(result.totalNotified)}</code>\n` +
+      `⚠️ <b>ناموفق / بدون قطعی:</b> <code>${toPersianDigits(result.totalFailed)}</code>`;
+
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, {
+      parse_mode: 'HTML'
+    }).catch(async () => {
+      await ctx.reply(report, { parse_mode: 'HTML' });
+    });
+  });
+
   // Main Menu Buttons
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
@@ -1273,26 +1296,180 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
   }
 }
 
+// ================= SCHEDULED NOTIFICATIONS CORE =================
+
+async function runScheduledNotifications(env, bot, storage, force = false) {
+  const todayGregorian = getIranGregorianDate(0);
+  const todayJalali = getTodayJalali(0);
+  const todayWeekday = getPersianWeekdayName(0);
+
+  const allUsers = await storage.getAllUsers();
+  const subscribed = allUsers.filter(u => u.notifications?.enabled !== false && u.savedBills?.length > 0);
+  console.log(`[Scheduled] Checking ${subscribed.length} subscribed users for date ${todayJalali}`);
+
+  let totalChecked = 0;
+  let totalNotified = 0;
+  let totalFailed = 0;
+
+  for (const user of subscribed) {
+    if (!force && user.notifications?.lastNotifiedDate === todayJalali) continue;
+    totalChecked++;
+
+    try {
+      let hasTodayOutage = false;
+      const alertMessages = [];
+
+      for (const savedBill of user.savedBills) {
+        const schedule = await fetchGopedSchedule(savedBill.billId, force, storage);
+        if (schedule.Code !== 1 || !schedule.Result || !Array.isArray(schedule.Result.Blackouts)) continue;
+
+        const todayBlackouts = schedule.Result.Blackouts.filter(b => {
+          const info = parseDateInfo(b.Date || b.date);
+          return info.gregorianStr === todayGregorian || info.jalaliStr === todayJalali;
+        });
+
+        if (todayBlackouts.length > 0) {
+          hasTodayOutage = true;
+          let billBlock = `🏷 <b>${savedBill.label}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
+          todayBlackouts.forEach(b => {
+            billBlock += formatBlackoutCard(b, true, false) + '\n';
+          });
+          alertMessages.push(billBlock);
+        }
+        await new Promise(r => setTimeout(r, 400));
+      }
+
+      if (hasTodayOutage && alertMessages.length > 0) {
+        const fullAlert = `🚨 <b>هشدار خاموشی برق امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n` +
+          alertMessages.join('\n━━━━━━━━━━━━━━━━━━━━\n') +
+          `\n<i>⚠️ لطفاً اقدامات لازم جهت مدیریت مصرف و وسایل برقی را انجام دهید.</i>`;
+
+        await bot.api.sendMessage(user.userId, fullAlert, { parse_mode: 'HTML' });
+        user.notifications = user.notifications || {};
+        user.notifications.lastNotifiedDate = todayJalali;
+        await storage.saveUser(user);
+        totalNotified++;
+        console.log(`[Scheduled] Notification sent to user ${user.userId}`);
+      }
+    } catch (err) {
+      totalFailed++;
+      console.error(`[Scheduled] Failed to notify user ${user.userId}:`, err.message);
+    }
+  }
+
+  return { dateJalali: todayJalali, totalChecked, totalNotified, totalFailed };
+}
+
 // ================= EXPORTS (WEBHOOK & SCHEDULED CRON) =================
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // Health check and root info
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+      return new Response(JSON.stringify({
+        status: 'online',
+        service: 'GOPED Electricity Outage Telegram Bot',
+        platform: 'Cloudflare Workers (100% Serverless)',
+        timestamp: new Date().toISOString(),
+        iranDate: getTodayJalali(0)
+      }, null, 2), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    }
+
+    // Direct API proxy test endpoint
     if (url.pathname === '/test-api') {
       try {
         const billId = url.searchParams.get('billId') || '6357330214322';
-        const data = await fetchGopedSchedule(billId, true);
+        const storage = new CloudflareStorage(env.POWERBOT_KV);
+        const data = await fetchGopedSchedule(billId, true, storage);
         return new Response(JSON.stringify(data, null, 2), {
           headers: { 'Content-Type': 'application/json; charset=utf-8' }
         });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message, stack: e.stack }), {
           status: 500,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
         });
       }
     }
 
+    // Set Webhook & Commands Setup Endpoint
+    if (url.pathname === '/setup' || url.pathname === '/set-webhook') {
+      try {
+        const { bot } = createBot(env, ctx);
+        const webhookUrl = `${url.origin}/`;
+        const setWebhookRes = await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
+        const setCommandsRes = await bot.api.setMyCommands([
+          { command: 'start', description: 'شروع و منوی اصلی' },
+          { command: 'check', description: 'استعلام قطعی برق (مثال: /check 1234567890123)' },
+          { command: 'bookmarks', description: 'لیست و مدیریت قبض‌های نشان‌شده' },
+          { command: 'bookmark', description: 'افزودن شناسه قبض جدید' },
+          { command: 'notice', description: 'آخرین اطلاعیه‌های شرکت توزیع' },
+          { command: 'shout', description: 'ارسال پیام همگانی به همه کاربران (ادمین)' },
+          { command: 'users', description: 'مشاهده آمار و لیست کاربران (ادمین)' },
+          { command: 'testnotif', description: 'تست ارسال هشدار روزانه (ادمین)' },
+          { command: 'help', description: 'راهنما' }
+        ]).catch(() => true);
+        const info = await bot.api.getWebhookInfo();
+        return new Response(JSON.stringify({
+          success: true,
+          setWebhook: setWebhookRes,
+          setCommands: setCommandsRes,
+          webhookInfo: info
+        }, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+
+    // Export all users endpoint
+    if (url.pathname === '/export-all') {
+      try {
+        const { storage } = createBot(env, ctx);
+        const users = await storage.getAllUsers();
+        const stats = await storage.getStats();
+        return new Response(JSON.stringify({ stats, users }, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+
+    // Telegram Bot & Webhook Info
+    if (url.pathname === '/info' || url.pathname === '/status') {
+      try {
+        const { bot, storage } = createBot(env, ctx);
+        const info = await bot.api.getWebhookInfo();
+        const me = await bot.api.getMe();
+        const stats = await storage.getStats();
+        return new Response(JSON.stringify({
+          bot: me,
+          webhook: info,
+          stats
+        }, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+
+    // Telegram Webhook Handler (POST)
     if (request.method === 'POST') {
       try {
         const update = await request.json();
@@ -1313,55 +1490,7 @@ export default {
     const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
     const bot = new Bot(token);
     const storage = new CloudflareStorage(env.POWERBOT_KV);
-
-    const todayGregorian = getIranGregorianDate(0);
-    const todayJalali = getTodayJalali(0);
-    const todayWeekday = getPersianWeekdayName(0);
-
-    const allUsers = await storage.getAllUsers();
-    const subscribed = allUsers.filter(u => u.notifications?.enabled && u.savedBills?.length > 0);
-    console.log(`[Cron] Checking ${subscribed.length} subscribed users for date ${todayJalali}`);
-
-    for (const user of subscribed) {
-      if (user.notifications.lastNotifiedDate === todayJalali) continue;
-
-      try {
-        let hasTodayOutage = false;
-        const alertMessages = [];
-
-        for (const savedBill of user.savedBills) {
-          const schedule = await fetchGopedSchedule(savedBill.billId);
-          if (schedule.Code !== 1 || !schedule.Result || !Array.isArray(schedule.Result.Blackouts)) continue;
-
-          const todayBlackouts = schedule.Result.Blackouts.filter(b => {
-            const info = parseDateInfo(b.Date || b.date);
-            return info.gregorianStr === todayGregorian || info.jalaliStr === todayJalali;
-          });
-
-          if (todayBlackouts.length > 0) {
-            hasTodayOutage = true;
-            let billBlock = `🏷 <b>${savedBill.label}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
-            todayBlackouts.forEach(b => {
-              billBlock += formatBlackoutCard(b, true, false) + '\n';
-            });
-            alertMessages.push(billBlock);
-          }
-          await new Promise(r => setTimeout(r, 600));
-        }
-
-        if (hasTodayOutage && alertMessages.length > 0) {
-          const fullAlert = `🚨 <b>هشدار خاموشی برق امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n` +
-            alertMessages.join('\n━━━━━━━━━━━━━━━━━━━━\n') +
-            `\n<i>⚠️ لطفاً اقدامات لازم جهت مدیریت مصرف و وسایل برقی را انجام دهید.</i>`;
-
-          await bot.api.sendMessage(user.userId, fullAlert, { parse_mode: 'HTML' });
-          user.notifications.lastNotifiedDate = todayJalali;
-          await storage.saveUser(user);
-          console.log(`[Cron] Notification sent to user ${user.userId}`);
-        }
-      } catch (err) {
-        console.error(`[Cron] Failed to notify user ${user.userId}:`, err.message);
-      }
-    }
+    await runScheduledNotifications(env, bot, storage, false);
   }
 };
+

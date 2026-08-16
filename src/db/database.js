@@ -23,11 +23,33 @@ class JsonDatabase {
         const raw = fs.readFileSync(this.filePath, 'utf8');
         this.data = JSON.parse(raw);
         if (!this.data.users) this.data.users = {};
+        console.log(`[Database] Loaded ${Object.keys(this.data.users).length} users from: ${this.filePath}`);
       } else {
+        // Look for bundled seed database if custom volume path is newly mounted and empty
+        const defaultSeedPath = path.resolve('./data/database.json');
+        if (this.filePath !== defaultSeedPath && fs.existsSync(defaultSeedPath)) {
+          console.log(`[Database] Initializing new database from seed: ${defaultSeedPath}`);
+          const rawSeed = fs.readFileSync(defaultSeedPath, 'utf8');
+          this.data = JSON.parse(rawSeed);
+          if (!this.data.users) this.data.users = {};
+        }
         this._save();
       }
     } catch (err) {
-      console.error('Database initialization error:', err);
+      console.error('[Database] Initialization error:', err);
+      // Attempt restore from backup if main file failed parsing
+      const backupPath = `${this.filePath}.backup.json`;
+      if (fs.existsSync(backupPath)) {
+        try {
+          console.warn(`[Database] Attempting recovery from backup: ${backupPath}`);
+          const rawBackup = fs.readFileSync(backupPath, 'utf8');
+          this.data = JSON.parse(rawBackup);
+          if (!this.data.users) this.data.users = {};
+          return;
+        } catch (backupErr) {
+          console.error('[Database] Backup recovery failed:', backupErr);
+        }
+      }
       this.data = { users: {} };
     }
   }
@@ -38,11 +60,16 @@ class JsonDatabase {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+      const jsonContent = JSON.stringify(this.data, null, 2);
       const tmpPath = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf8');
+      fs.writeFileSync(tmpPath, jsonContent, 'utf8');
       fs.renameSync(tmpPath, this.filePath);
+
+      // Create backup copy for disaster recovery
+      const backupPath = `${this.filePath}.backup.json`;
+      fs.writeFileSync(backupPath, jsonContent, 'utf8');
     } catch (err) {
-      console.error('Database save error:', err);
+      console.error('[Database] Save error:', err);
     }
   }
 
