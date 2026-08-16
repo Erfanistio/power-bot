@@ -214,7 +214,7 @@ async function fetchGopedSchedule(billId, forceFresh = false, storage = null) {
 
   for (let attempt = 0; attempt < 1; attempt++) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     try {
       const res = await fetch(url, {

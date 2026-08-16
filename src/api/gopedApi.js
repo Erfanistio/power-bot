@@ -5,7 +5,7 @@ export class GopedApiClient {
   constructor(baseUrl = config.apiUrl, authToken = config.authToken, timeoutMs = config.apiTimeoutMs) {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     this.authToken = authToken;
-    this.timeoutMs = timeoutMs || 5000;
+    this.timeoutMs = timeoutMs || 12000;
   }
 
   /**
@@ -159,7 +159,7 @@ export class GopedApiClient {
     } catch (err) {
       const isTimeout = err.name === 'AbortError' || String(err.message).toLowerCase().includes('abort') || String(err.message).toLowerCase().includes('timeout');
       const message = isTimeout
-        ? '⏱ متأسفانه سرور شرکت توزیع برق در ۵ ثانیه پاسخ نداد. لطفاً لحظاتی بعد مجدداً تلاش کنید.'
+        ? '⏱ متأسفانه سرور شرکت توزیع برق در این لحظه پاسخ نداد. لطفاً لحظاتی بعد مجدداً تلاش کنید.'
         : `خطا در ارتباط با سرور شرکت توزیع برق: ${err.message}`;
 
       return {
