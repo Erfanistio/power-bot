@@ -1366,6 +1366,36 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Ultra-Fast GOPED API Proxy for Railway
+    if (url.pathname.startsWith('/proxy/')) {
+      try {
+        const subPath = url.pathname.replace(/^\/proxy\/?/, '');
+        const targetUrl = new URL(subPath + url.search, GOPED_API_URL).toString();
+        const apiRes = await fetch(targetUrl, {
+          method: request.method,
+          headers: {
+            'Auth-Token': GOPED_AUTH_TOKEN,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*'
+          }
+        });
+        const body = await apiRes.text();
+        return new Response(body, {
+          status: apiRes.status,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store'
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ Code: 0, error: err.message }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+
     // Health check and root info
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
       return new Response(JSON.stringify({

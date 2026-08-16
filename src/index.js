@@ -44,6 +44,21 @@ async function main() {
       return;
     }
 
+    if (url.pathname === '/test-schedule') {
+      const billId = url.searchParams.get('billId') || '6357330214322';
+      import('./api/gopedApi.js').then(async ({ gopedApi }) => {
+        try {
+          const data = await gopedApi.getSchedule(billId, true);
+          res.writeHead(200);
+          res.end(JSON.stringify(data, null, 2));
+        } catch (e) {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: e.message, stack: e.stack }));
+        }
+      });
+      return;
+    }
+
     res.writeHead(404);
     res.end(JSON.stringify({ error: 'Not Found' }));
   });

@@ -1,5 +1,8 @@
 import 'dotenv/config';
 
+// Allow HTTPS requests to Iranian government portals with self-signed SSL certs
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 export const config = {
   // Telegram Bot Token (from @BotFather)
   botToken: process.env.BOT_TOKEN || '',
