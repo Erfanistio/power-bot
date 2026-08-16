@@ -1366,31 +1366,39 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Ultra-Fast GOPED API Proxy for Railway
-    if (url.pathname.startsWith('/proxy/')) {
+    // Ultra-Fast Cached GOPED API Proxy for Railway
+    if (url.pathname === '/api/schedule' || url.pathname === '/Api/GetSchedule_Web' || url.pathname === '/test-api') {
       try {
-        const subPath = url.pathname.replace(/^\/proxy\/?/, '');
-        const targetUrl = new URL(subPath + url.search, GOPED_API_URL).toString();
-        const apiRes = await fetch(targetUrl, {
-          method: request.method,
-          headers: {
-            'Auth-Token': GOPED_AUTH_TOKEN,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*'
-          }
-        });
-        const body = await apiRes.text();
-        return new Response(body, {
-          status: apiRes.status,
+        const billId = url.searchParams.get('billId') || url.searchParams.get('BillId') || '6357330214322';
+        const force = url.searchParams.get('force') === 'true';
+        const storage = new CloudflareStorage(env.POWERBOT_KV);
+        const data = await fetchGopedSchedule(billId, force, storage);
+        return new Response(JSON.stringify(data, null, 2), {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'no-store'
+            'Access-Control-Allow-Origin': '*'
           }
         });
-      } catch (err) {
-        return new Response(JSON.stringify({ Code: 0, error: err.message }), {
-          status: 502,
+      } catch (e) {
+        return new Response(JSON.stringify({ Code: 0, Description: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
+    }
+
+    if (url.pathname === '/api/notice' || url.pathname === '/Api/GetNotice') {
+      try {
+        const data = await fetchGopedNotice();
+        return new Response(JSON.stringify(data, null, 2), {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ Code: 0, Description: e.message }), {
+          status: 500,
           headers: { 'Content-Type': 'application/json; charset=utf-8' }
         });
       }
@@ -1407,23 +1415,6 @@ export default {
       }, null, 2), {
         headers: { 'Content-Type': 'application/json; charset=utf-8' }
       });
-    }
-
-    // Direct API proxy test endpoint
-    if (url.pathname === '/test-api') {
-      try {
-        const billId = url.searchParams.get('billId') || '6357330214322';
-        const storage = new CloudflareStorage(env.POWERBOT_KV);
-        const data = await fetchGopedSchedule(billId, true, storage);
-        return new Response(JSON.stringify(data, null, 2), {
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message, stack: e.stack }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      }
     }
 
     // Set Webhook & Commands Setup Endpoint
