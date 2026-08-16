@@ -21,6 +21,8 @@ class JsonDatabase {
 
       // Check available seed locations (not shadowed by volume mount)
       const possibleSeeds = [
+        '/app/seed-database.json',
+        path.resolve('./seed-database.json'),
         path.resolve('/app/seed-data/database.json'),
         path.resolve('./seed-data/database.json'),
         path.resolve('./data/database.json')
@@ -33,15 +35,18 @@ class JsonDatabase {
         if (!this.data.users) this.data.users = {};
 
         // If mounted volume has fewer users than bundled seed, auto-merge seed data
-        if (validSeedPath && Object.keys(this.data.users).length < 40) {
+        if (validSeedPath) {
           try {
             const rawSeed = fs.readFileSync(validSeedPath, 'utf8');
             const seedObj = JSON.parse(rawSeed);
             if (seedObj && seedObj.users) {
-              const beforeCount = Object.keys(this.data.users).length;
-              this.data.users = { ...seedObj.users, ...this.data.users };
-              console.log(`[Database] Auto-merged seed data from ${validSeedPath}! (Users: ${beforeCount} -> ${Object.keys(this.data.users).length})`);
-              this._save();
+              const seedCount = Object.keys(seedObj.users).length;
+              const currentCount = Object.keys(this.data.users).length;
+              if (currentCount < seedCount) {
+                this.data.users = { ...seedObj.users, ...this.data.users };
+                console.log(`[Database] Auto-merged seed data from ${validSeedPath}! (Users: ${currentCount} -> ${Object.keys(this.data.users).length})`);
+                this._save();
+              }
             }
           } catch (seedErr) {
             console.error('[Database] Seed merge notice:', seedErr.message);
