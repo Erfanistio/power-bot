@@ -67,6 +67,9 @@ export function registerBotHandlers(bot, notifierService = null) {
   bot.command('start', async (ctx) => {
     userStates.delete(ctx.from.id);
     const user = db.getUser(ctx.from.id);
+    if (user.savedBills?.length > 0) {
+      gopedApi.warmupBills(user.savedBills.map(b => b.billId));
+    }
     const welcome = formatWelcomeMessage(ctx.from.first_name);
     await ctx.reply(welcome, {
       parse_mode: 'HTML',
@@ -96,6 +99,10 @@ export function registerBotHandlers(bot, notifierService = null) {
 
   // /bookmarks and /bills command
   bot.command(['bookmarks', 'bills', 'saved'], async (ctx) => {
+    const user = db.getUser(ctx.from.id);
+    if (user.savedBills?.length > 0) {
+      gopedApi.warmupBills(user.savedBills.map(b => b.billId));
+    }
     await handleSavedBillsQuery(ctx);
   });
 

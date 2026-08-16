@@ -52,14 +52,26 @@ export class OutageNotificationService {
   }
 
   startHeartbeat() {
-    // Ping every 7 minutes to keep DNS, TLS sockets, and API warm
-    this.heartbeatTimer = setInterval(async () => {
+    const warmAllBills = () => {
       try {
-        await gopedApi.getNotice(false);
-      } catch {
-        // Silent warmup ping
+        const users = db.getAllUsers();
+        const allBillIds = new Set();
+        for (const u of users) {
+          for (const b of u.savedBills || []) {
+            if (b.billId) allBillIds.add(b.billId);
+          }
+        }
+        gopedApi.warmupBills(Array.from(allBillIds));
+      } catch (err) {
+        // Silent catch
       }
-    }, 7 * 60 * 1000);
+    };
+
+    // Initial background warmup after 5s
+    setTimeout(warmAllBills, 5000);
+
+    // Warm up active bill IDs every 15 minutes in the background
+    this.heartbeatTimer = setInterval(warmAllBills, 15 * 60 * 1000);
     // Unref so timer does not prevent process exit if needed
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
   }

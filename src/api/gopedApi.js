@@ -9,8 +9,21 @@ export class GopedApiClient {
     // In-memory cache: billId -> { timestamp, data }
     this._scheduleCache = new Map();
     this._noticeCache = null;
-    this.cacheTtlMs = 4 * 60 * 1000; // 4 minutes cache TTL
-    this.noticeTtlMs = 10 * 60 * 1000; // 10 minutes notice TTL
+    this.cacheTtlMs = 20 * 60 * 1000; // 20 minutes cache TTL for fast responses
+    this.noticeTtlMs = 15 * 60 * 1000; // 15 minutes notice TTL
+  }
+
+  /**
+   * Proactively warm up cache for a list of bill IDs in parallel (non-blocking).
+   */
+  warmupBills(rawBillIds = []) {
+    if (!Array.isArray(rawBillIds) || rawBillIds.length === 0) return;
+    for (const rawId of rawBillIds) {
+      const billId = this.cleanBillId(rawId);
+      if (billId && !this.hasFreshCache(billId)) {
+        this.getSchedule(billId, false).catch(() => {});
+      }
+    }
   }
 
   /**
