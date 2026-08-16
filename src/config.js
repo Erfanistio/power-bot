@@ -7,8 +7,8 @@ export const config = {
   // Telegram Bot Token (from @BotFather)
   botToken: process.env.BOT_TOKEN || '',
 
-  // GOPED Backend API (default to ultra-fast worker proxy with direct fallback)
-  apiUrl: process.env.GOPED_API_URL || 'https://goped-power-bot.noterfanistio.workers.dev/api/',
+  // GOPED Backend API (routed via your custom Cloudflare Worker proxy domain)
+  apiUrl: process.env.GOPED_API_URL || 'https://api.gymove.ir/',
   authToken: process.env.GOPED_AUTH_TOKEN || '7f3c2a91-6d84-4b17-a5e9-2c0f8d6b31a4',
 
   // Timeout for API requests in milliseconds (45s to avoid premature abort on slow government servers)
