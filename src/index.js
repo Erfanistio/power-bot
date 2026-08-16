@@ -64,8 +64,8 @@ async function main() {
     res.end(JSON.stringify({ error: 'Not Found' }));
   });
 
-  httpServer.listen(port, () => {
-    console.log(`🌐 HTTP Healthcheck server listening on port ${port} (Railway ready)`);
+  httpServer.listen(port, '0.0.0.0', () => {
+    console.log(`🌐 HTTP Healthcheck server listening on 0.0.0.0:${port} (Railway ready)`);
   });
 
   // 2. Initialize Telegram Bot
