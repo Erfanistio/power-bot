@@ -44,14 +44,14 @@ export function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmar
     kb.text('⚡️ امروز', `sched:today:${billId}`);
   }
   if (currentMode !== 'tomorrow') {
-    kb.text('🗓 فردا', `sched:tom:${billId}`);
+    kb.text('🗓 فردا', `sched:tomorrow:${billId}`);
   }
   if (currentMode !== 'all') {
     kb.text('📋 کل جدول', `sched:all:${billId}`);
   }
 
   kb.row();
-  kb.text('🔄 بروزرسانی', `sched:${currentMode}:${billId}`);
+  kb.text('🔄 بروزرسانی', `sched_refresh:${currentMode}:${billId}`);
 
   if (!isBookmarked) {
     kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);

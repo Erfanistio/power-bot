@@ -15,7 +15,12 @@ import {
   getNotificationSettingsKeyboard
 } from './keyboards.js';
 import { config } from '../config.js';
-import { toEnglishDigits, toPersianDigits, parseDateInfo } from '../utils/persianDate.js';
+import {
+  toEnglishDigits,
+  toPersianDigits,
+  parseDateInfo,
+  normalizePersianText
+} from '../utils/persianDate.js';
 
 // In-memory conversation state for step-by-step inputs (e.g. adding a bill with label)
 const userStates = new Map();
@@ -45,8 +50,9 @@ function getPrivateReplyKeyboard(ctx, savedBills = []) {
 /**
  * Registers all Telegram bot handlers and callbacks.
  * @param {import('grammy').Bot} bot
+ * @param {import('../services/notifier.js').OutageNotificationService} [notifierService]
  */
-export function registerBotHandlers(bot) {
+export function registerBotHandlers(bot, notifierService = null) {
   // Save user profile info in database on any update
   bot.use(async (ctx, next) => {
     if (ctx.from) {
@@ -134,6 +140,34 @@ export function registerBotHandlers(bot) {
   });
 
   // ================= ADMIN COMMANDS =================
+
+  // /testnotif and /runnotif admin command
+  bot.command(['testnotif', 'runnotif', 'checknotif'], async (ctx) => {
+    if (!isUserAdmin(ctx.from.id)) {
+      await ctx.reply('⛔️ شما دسترسی مدیریت برای اجرای این دستور را ندارید.');
+      return;
+    }
+
+    if (!notifierService) {
+      await ctx.reply('⚠️ سرویس اعلان در دسترس نیست.');
+      return;
+    }
+
+    const statusMsg = await ctx.reply('⏳ در حال بررسی و تست ارسال اعلانات روزانه...');
+    const result = await notifierService.checkAndNotifyAll(true);
+
+    const report = `🔔 <b>گزارش اجرای تست اعلان خاموشی:</b>\n\n` +
+      `📅 <b>تاریخ:</b> ${toPersianDigits(result.dateJalali)}\n` +
+      `👥 <b>کاربران بررسی‌شده:</b> <code>${toPersianDigits(result.totalChecked)}</code>\n` +
+      `📨 <b>پیام‌های ارسال‌شده:</b> <code>${toPersianDigits(result.totalNotified)}</code>\n` +
+      `⚠️ <b>ناموفق / بدون قطعی:</b> <code>${toPersianDigits(result.totalFailed)}</code>`;
+
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, {
+      parse_mode: 'HTML'
+    }).catch(async () => {
+      await ctx.reply(report, { parse_mode: 'HTML' });
+    });
+  });
 
   // /users and /stats admin command
   bot.command(['users', 'userlist', 'stats', 'admin'], async (ctx) => {
@@ -224,6 +258,7 @@ export function registerBotHandlers(bot) {
       } catch (err) {
         if (err.description && (err.description.includes('bot was blocked') || err.description.includes('user is deactivated') || err.description.includes('chat not found'))) {
           blockedCount++;
+          db.setNotifications(u.userId, false);
         } else {
           failedCount++;
         }
@@ -252,29 +287,32 @@ export function registerBotHandlers(bot) {
   // Handle Main Menu Button Texts
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
     const user = db.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
+    if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await handleScheduleQuery(ctx, user.activeBillId, 'today');
+    await handleScheduleQuery(ctx, activeBillId, 'today');
   });
 
   bot.hears('🗓 خاموشی فردا', async (ctx) => {
     const user = db.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
+    if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await handleScheduleQuery(ctx, user.activeBillId, 'tomorrow');
+    await handleScheduleQuery(ctx, activeBillId, 'tomorrow');
   });
 
   bot.hears('📋 کل برنامه هفتگی', async (ctx) => {
     const user = db.getUser(ctx.from.id);
-    if (!user.activeBillId) {
+    const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
+    if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
       return;
     }
-    await handleScheduleQuery(ctx, user.activeBillId, 'all');
+    await handleScheduleQuery(ctx, activeBillId, 'all');
   });
 
   bot.hears(['🔖 نشان‌شده‌های من', '📂 شناسه‌های من'], async (ctx) => {
@@ -314,9 +352,15 @@ export function registerBotHandlers(bot) {
     // If user clicked on a dynamic bookmark button (e.g. "🔖 خونه" or "🔖 مغازه")
     if (user.savedBills && user.savedBills.length > 0) {
       const cleanText = text.replace(/^🔖\s*/, '').trim();
-      const matchedBookmark = user.savedBills.find(
-        b => b.label === cleanText || `🔖 ${b.label}` === text || b.billId === cleanText
-      );
+      const normClean = normalizePersianText(cleanText);
+      const matchedBookmark = user.savedBills.find(b => {
+        const normLabel = normalizePersianText(b.label);
+        return normLabel === normClean ||
+               b.label === cleanText ||
+               `🔖 ${b.label}` === text ||
+               b.billId === cleanText ||
+               b.billId === toEnglishDigits(cleanText);
+      });
       if (matchedBookmark) {
         db.setActiveBillId(userId, matchedBookmark.billId);
         await handleScheduleQuery(ctx, matchedBookmark.billId, 'all');
@@ -402,14 +446,26 @@ export function registerBotHandlers(bot) {
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const userId = ctx.from.id;
-    await ctx.answerCallbackQuery().catch(() => {});
+
+    // Refresh schedule query: sched_refresh:<mode>:<billId>
+    if (data.startsWith('sched_refresh:')) {
+      const [, mode, billId] = data.split(':');
+      await ctx.answerCallbackQuery({ text: '🔄 در حال دریافت جدیدترین اطلاعات...' }).catch(() => {});
+      const normalizedMode = mode === 'tom' ? 'tomorrow' : mode;
+      await handleScheduleQuery(ctx, billId, normalizedMode, true, true);
+      return;
+    }
 
     // Schedule view mode change: sched:<mode>:<billId>
     if (data.startsWith('sched:')) {
+      await ctx.answerCallbackQuery().catch(() => {});
       const [, mode, billId] = data.split(':');
-      await handleScheduleQuery(ctx, billId, mode, true);
+      const normalizedMode = mode === 'tom' ? 'tomorrow' : mode;
+      await handleScheduleQuery(ctx, billId, normalizedMode, true, false);
       return;
     }
+
+    await ctx.answerCallbackQuery().catch(() => {});
 
     // Select active bill: select_bill:<billId>
     if (data.startsWith('select_bill:')) {
@@ -526,30 +582,44 @@ export function registerBotHandlers(bot) {
 /**
  * Executes a schedule lookup from GOPED API and updates or sends message.
  */
-async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false) {
+async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false, forceFresh = false) {
   const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
+  if (!billId || billId.length < 6) {
+    await ctx.reply('❌ شناسه قبض نامعتبر است.');
+    return;
+  }
+
   const user = db.getUser(ctx.from.id);
   const savedItem = user.savedBills.find(b => b.billId === billId);
   const customLabel = savedItem ? savedItem.label : '';
   const isBookmarked = Boolean(savedItem);
 
+  const hasFreshCache = !forceFresh && gopedApi.hasFreshCache(billId);
+
   let loadingMsg = null;
-  if (!isEdit) {
+  if (!isEdit && !hasFreshCache) {
     loadingMsg = await ctx.reply('⏳ در حال دریافت برنامه خاموشی از سامانه برق گلستان...').catch(() => null);
   }
 
   try {
-    const result = await gopedApi.getSchedule(billId);
+    const result = await gopedApi.getSchedule(billId, forceFresh);
     const text = formatScheduleMessage(result, mode, customLabel);
-    const replyMarkup = result.success ? getScheduleInlineKeyboard(billId, mode, isBookmarked) : undefined;
+    const replyMarkup = getScheduleInlineKeyboard(billId, mode, isBookmarked);
 
     if (isEdit && ctx.callbackQuery?.message) {
-      await ctx.editMessageText(text, {
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup
-      }).catch(async () => {
-        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
-      });
+      try {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: replyMarkup
+        });
+      } catch (editErr) {
+        const errMsg = String(editErr?.message || editErr?.description || '');
+        if (errMsg.includes('message is not modified')) {
+          await ctx.answerCallbackQuery({ text: '✅ اطلاعات هم‌اکنون بروز است.' }).catch(() => {});
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+        }
+      }
     } else {
       if (loadingMsg) {
         await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
@@ -618,3 +688,4 @@ async function handleNotificationSettings(ctx) {
     reply_markup: getNotificationSettingsKeyboard(isEnabled)
   });
 }
+

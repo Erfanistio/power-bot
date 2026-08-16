@@ -15,12 +15,12 @@ async function main() {
 
   const bot = new Bot(config.botToken);
 
-  // Register command and callback handlers
-  registerBotHandlers(bot);
-
   // Initialize and start background notification scheduler
   const notifier = new OutageNotificationService(bot);
   notifier.start();
+
+  // Register command and callback handlers
+  registerBotHandlers(bot, notifier);
 
   // Set bot commands menu for Telegram UI
   await bot.api.setMyCommands([
@@ -49,6 +49,7 @@ async function main() {
 
   console.log('🚀 Bot is running and listening for Telegram updates...');
   await bot.start({
+    drop_pending_updates: true,
     onStart(botInfo) {
       console.log(`🤖 Bot @${botInfo.username} (${botInfo.first_name}) started successfully!`);
     }

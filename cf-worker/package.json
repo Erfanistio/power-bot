@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
   "dependencies": {
     "grammy": "^1.35.0"
   },

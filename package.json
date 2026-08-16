@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node test/test-api.js"
+    "test": "node test/test-api.js",
+    "cf:deploy": "node -e \"import('dotenv/config').then(async () => { const { spawnSync } = await import('child_process'); spawnSync('npx', ['wrangler', 'deploy'], { stdio: 'inherit', cwd: 'cf-worker', shell: true, env: process.env }); });\"",
+    "delete-webhook": "node -e \"import('dotenv/config').then(() => fetch('https://api.telegram.org/bot' + process.env.BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true').then(r => r.json()).then(d => console.log('Webhook deleted:', d)));\""
   },
   "keywords": [
     "telegram-bot",

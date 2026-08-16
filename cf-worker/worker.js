@@ -27,57 +27,161 @@ function toPersianDigits(str) {
   return String(str).replace(/\d/g, d => p[parseInt(d, 10)]);
 }
 
+function normalizePersianText(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/[\u200c\u200d\u200e\u200f\uFEFF]/g, '') // strip ZWNJ and invisible zero-width chars
+    .replace(/[يى]/g, 'ی')
+    .replace(/[ك]/g, 'ک')
+    .replace(/[ة]/g, 'ه')
+    .replace(/[ؤ]/g, 'و')
+    .replace(/[إأآ]/g, 'ا')
+    .trim();
+}
+
+const WEEKDAY_NAMES_MAP = {
+  0: 'یکشنبه',
+  1: 'دوشنبه',
+  2: 'سه‌شنبه',
+  3: 'چهارشنبه',
+  4: 'پنج‌شنبه',
+  5: 'جمعه',
+  6: 'شنبه'
+};
+
+function gregorianToJalali(gy, gm, gd) {
+  const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  let jy = (gy <= 1600) ? 0 : 979;
+  gy -= (gy <= 1600) ? 621 : 1600;
+  const gy2 = (gm > 2) ? (gy + 1) : gy;
+  let days = (365 * gy) + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + gd + g_d_m[gm - 1];
+  jy += 33 * Math.floor(days / 12053);
+  days %= 12053;
+  jy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) {
+    jy += Math.floor((days - 1) / 365);
+    days = (days - 1) % 365;
+  }
+  const jm = (days < 186) ? 1 + Math.floor(days / 31) : 7 + Math.floor((days - 186) / 30);
+  const jd = 1 + ((days < 186) ? (days % 31) : ((days - 186) % 30));
+  return { jy, jm, jd };
+}
+
+function jalaliToGregorian(jy, jm, jd) {
+  let gy = (jy <= 979) ? 621 : 1600;
+  jy -= (jy <= 979) ? 0 : 979;
+  let days = (365 * jy) + (Math.floor(jy / 33) * 8) + Math.floor(((jy % 33) + 3) / 4) + 78 + jd + ((jm < 7) ? ((jm - 1) * 31) : (((jm - 7) * 30) + 186));
+  gy += 400 * Math.floor(days / 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * Math.floor(--days / 36524);
+    days %= 36524;
+    if (days >= 365) days++;
+  }
+  gy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += Math.floor((days - 1) / 365);
+    days = (days - 1) % 365;
+  }
+  const leap = (gy % 4 === 0 && gy % 100 !== 0) || (gy % 400 === 0);
+  const sal_a = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 0;
+  for (gm = 0; gm < 13 && days >= sal_a[gm]; gm++) {
+    days -= sal_a[gm];
+  }
+  const gd = days + 1;
+  return { gy, gm, gd };
+}
+
 function formatTimeShort(timeStr) {
   if (!timeStr) return '';
   const parts = String(timeStr).trim().split(':');
-  if (parts.length >= 2) return `${parts[0]}:${parts[1]}`;
-  return timeStr;
+  if (parts.length >= 2) return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+  return String(timeStr).trim();
+}
+
+function getTehranNow(offsetDays = 0) {
+  const now = new Date();
+  const target = new Date(now.getTime() + (offsetDays * 24 * 60 * 60 * 1000));
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(target);
+
+  const getPart = (type) => parts.find(p => p.type === type)?.value || '00';
+  return {
+    year: parseInt(getPart('year'), 10),
+    month: parseInt(getPart('month'), 10),
+    day: parseInt(getPart('day'), 10),
+    hour: getPart('hour'),
+    minute: getPart('minute'),
+    second: getPart('second')
+  };
 }
 
 function parseDateInfo(dateStr) {
-  if (!dateStr) return { jalaliStr: '', weekday: '', gregorianStr: '' };
+  if (!dateStr) return { jalaliStr: '', weekday: '', gregorianStr: '', isToday: false, isTomorrow: false };
   const cleaned = toEnglishDigits(String(dateStr)).trim().split('T')[0].split(' ')[0];
   const parts = cleaned.replace(/[-.]/g, '/').split('/');
   
-  if (parts.length === 3) {
-    const y = parseInt(parts[0], 10);
-    const m = parseInt(parts[1], 10);
-    const d = parseInt(parts[2], 10);
+  let gy, gm, gd, jy, jm, jd;
 
-    if (y > 1800) {
-      const gDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-      const jFormatter = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
-        timeZone: 'Asia/Tehran',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      });
-      const wFormatter = new Intl.DateTimeFormat('fa-IR', {
-        timeZone: 'Asia/Tehran',
-        weekday: 'long'
-      });
-      return {
-        jalaliStr: jFormatter.format(gDate),
-        weekday: wFormatter.format(gDate),
-        gregorianStr: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-      };
+  if (parts.length === 3) {
+    const p1 = parseInt(parts[0], 10);
+    const p2 = parseInt(parts[1], 10);
+    const p3 = parseInt(parts[2], 10);
+
+    if (p1 > 1800) {
+      gy = p1;
+      gm = p2;
+      gd = p3;
+      const j = gregorianToJalali(gy, gm, gd);
+      jy = j.jy;
+      jm = j.jm;
+      jd = j.jd;
     } else {
-      return {
-        jalaliStr: `${String(y).padStart(4, '0')}/${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`,
-        weekday: '',
-        gregorianStr: ''
-      };
+      jy = p1;
+      jm = p2;
+      jd = p3;
+      const g = jalaliToGregorian(jy, jm, jd);
+      gy = g.gy;
+      gm = g.gm;
+      gd = g.gd;
     }
+  } else {
+    return { jalaliStr: cleaned, weekday: '', gregorianStr: cleaned, isToday: false, isTomorrow: false };
   }
 
-  return { jalaliStr: cleaned, weekday: '', gregorianStr: cleaned };
+  const gregorianStr = `${gy}-${String(gm).padStart(2, '0')}-${String(gd).padStart(2, '0')}`;
+  const jalaliStr = `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`;
+
+  const dObj = new Date(Date.UTC(gy, gm - 1, gd, 12, 0, 0));
+  const dayOfWeek = dObj.getUTCDay();
+  const weekday = WEEKDAY_NAMES_MAP[dayOfWeek] || '';
+
+  const todayG = getIranGregorianDate(0);
+  const tomorrowG = getIranGregorianDate(1);
+
+  return {
+    jalaliStr,
+    weekday,
+    gregorianStr,
+    isToday: gregorianStr === todayG,
+    isTomorrow: gregorianStr === tomorrowG
+  };
 }
 
 function getIranGregorianDate(offsetDays = 0) {
-  const now = new Date();
-  const d = new Date(now.getTime() + (offsetDays * 24 * 60 * 60 * 1000));
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(d).split('-');
-  return `${parts[0]}-${parts[1]}-${parts[2]}`;
+  const t = getTehranNow(offsetDays);
+  return `${t.year}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}`;
 }
 
 function getTodayJalali(offsetDays = 0) {
@@ -93,30 +197,67 @@ function isUserAdmin(env, userId) {
   return adminIds.includes(String(userId));
 }
 
-// ================= GOPED API CLIENT =================
+// Module-level in-memory cache for warm isolates
+const memScheduleCache = new Map();
+const memUserCache = new Map();
 
-async function fetchGopedSchedule(billId) {
+async function fetchGopedSchedule(billId, forceFresh = false, storage = null) {
   const cleanId = toEnglishDigits(billId).replace(/\D/g, '');
-  const url = `${GOPED_API_URL}Api/GetSchedule_Web?BillId=${encodeURIComponent(cleanId)}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000);
-
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'Auth-Token': GOPED_AUTH_TOKEN,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*'
-      },
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    clearTimeout(timeoutId);
-    throw err;
+  const now = Date.now();
+  const cached = memScheduleCache.get(cleanId);
+  if (!forceFresh && cached && (now - cached.timestamp < 3 * 60 * 1000)) {
+    return cached.data;
   }
+
+  const url = `${GOPED_API_URL}Api/GetSchedule_Web?BillId=${encodeURIComponent(cleanId)}`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 18000);
+
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'Auth-Token': GOPED_AUTH_TOKEN,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*'
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && data.Code === 1) {
+        memScheduleCache.set(cleanId, { timestamp: now, data });
+        if (storage && typeof storage.saveScheduleCache === 'function') {
+          storage.saveScheduleCache(cleanId, data).catch(() => {});
+        }
+        return data;
+      }
+      return data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastError = err;
+      if (attempt === 0) {
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+  }
+
+  // Graceful fallback to memory or KV cache if GOPED server is down/slow
+  if (cached && cached.data) {
+    return { ...cached.data, isStaleFallback: true };
+  }
+
+  if (storage && typeof storage.getScheduleCache === 'function') {
+    const kvCached = await storage.getScheduleCache(cleanId).catch(() => null);
+    if (kvCached) {
+      return { ...kvCached, isStaleFallback: true };
+    }
+  }
+
+  throw lastError || new Error('خطا در برقراری ارتباط با سرور برق');
 }
 
 async function fetchGopedNotice() {
@@ -149,12 +290,23 @@ class CloudflareStorage {
     this.kv = kv;
   }
 
+  async getScheduleCache(billId) {
+    if (!this.kv) return null;
+    return await this.kv.get(`sched_cache:${billId}`, 'json');
+  }
+
+  async saveScheduleCache(billId, data) {
+    if (!this.kv || !data) return;
+    await this.kv.put(`sched_cache:${billId}`, JSON.stringify(data), { expirationTtl: 86400 });
+  }
+
   async getUser(userId) {
     const id = String(userId);
-    let user = null;
-    if (this.kv) {
+    let user = memUserCache.get(id);
+    if (!user && this.kv) {
       try {
         user = await this.kv.get(`user:${id}`, 'json');
+        if (user) memUserCache.set(id, user);
       } catch (e) {
         console.error(`KV parse error for user ${id}:`, e);
       }
@@ -175,13 +327,23 @@ class CloudflareStorage {
         updatedAt: new Date().toISOString()
       };
       await this.saveUser(user);
+    } else {
+      if (!Array.isArray(user.savedBills)) {
+        user.savedBills = [];
+      }
+      if (!user.activeBillId && user.savedBills.length > 0) {
+        user.activeBillId = user.savedBills[0].billId;
+        await this.saveUser(user);
+      }
     }
     return user;
   }
 
   async saveUser(user) {
-    if (!this.kv) return;
+    if (!user) return;
     user.updatedAt = new Date().toISOString();
+    memUserCache.set(String(user.userId), user);
+    if (!this.kv) return;
     await this.kv.put(`user:${user.userId}`, JSON.stringify(user));
 
     // Update users index list
@@ -340,7 +502,7 @@ function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = f
   if (currentMode !== 'today') kb.text('⚡️ امروز', `sched:today:${billId}`);
   if (currentMode !== 'tomorrow') kb.text('🗓 فردا', `sched:tom:${billId}`);
   if (currentMode !== 'all') kb.text('📋 کل جدول', `sched:all:${billId}`);
-  kb.row().text('🔄 بروزرسانی', `sched:${currentMode}:${billId}`);
+  kb.row().text('🔄 بروزرسانی', `sched_refresh:${currentMode}:${billId}`);
 
   if (!isBookmarked) {
     kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
@@ -434,7 +596,11 @@ function formatScheduleMessage(data, mode = 'all', customLabel = '') {
   const todayWeekday = getPersianWeekdayName(0);
   const tomorrowWeekday = getPersianWeekdayName(1);
 
-  let header = `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
+  let header = '';
+  if (data.isStaleFallback) {
+    header += `⚠️ <i>توجه: به دلیل کندی لحظه‌ای در سرور توزیع برق، آخرین اطلاعات دریافت شده نمایش داده می‌شود.</i>\n\n`;
+  }
+  header += `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
   if (customLabel) header += `🏷 <b>عنوان:</b> ${customLabel}\n`;
   if (customer.BillId) header += `📄 <b>شناسه قبض:</b> <code>${toPersianDigits(customer.BillId)}</code>\n`;
   if (customer.Name) header += `👤 <b>مشترک:</b> ${customer.Name}\n`;
@@ -513,7 +679,17 @@ function formatSavedBillsList(savedBills = [], activeBillId = null) {
 
 function createBot(env, executionCtx = null) {
   const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
-  const bot = new Bot(token);
+  const bot = new Bot(token, {
+    botInfo: {
+      id: 8931573991,
+      is_bot: true,
+      first_name: 'Power Bot',
+      username: 'goped_power_bot',
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: false
+    }
+  });
   const storage = new CloudflareStorage(env.POWERBOT_KV);
 
   // Global error handler so bot never crashes unhandled
@@ -822,9 +998,22 @@ function createBot(env, executionCtx = null) {
     // Dynamic bookmark button click
     if (user.savedBills && user.savedBills.length > 0) {
       const cleanText = text.replace(/^🔖\s*/, '').trim();
-      const matchedBookmark = user.savedBills.find(
-        b => b.label === cleanText || `🔖 ${b.label}` === text || b.billId === cleanText
-      );
+      const normInput = normalizePersianText(cleanText);
+      const digitsOnly = toEnglishDigits(text).replace(/\D/g, '');
+
+      const matchedBookmark = user.savedBills.find(b => {
+        const normLabel = normalizePersianText(b.label || '');
+        return (
+          b.label === cleanText ||
+          normLabel === normInput ||
+          `🔖 ${b.label}` === text ||
+          `🔖 ${normLabel}` === normInput ||
+          `🔖 ${normLabel}` === `🔖 ${normInput}` ||
+          b.billId === cleanText ||
+          b.billId === digitsOnly
+        );
+      });
+
       if (matchedBookmark) {
         await storage.setActiveBillId(userId, matchedBookmark.billId);
         await executeScheduleLookup(ctx, storage, matchedBookmark.billId, 'all');
@@ -907,9 +1096,12 @@ function createBot(env, executionCtx = null) {
     const userId = ctx.from.id;
     await ctx.answerCallbackQuery().catch(() => {});
 
-    if (data.startsWith('sched:')) {
-      const [, mode, billId] = data.split(':');
-      await executeScheduleLookup(ctx, storage, billId, mode === 'tom' ? 'tomorrow' : mode, true);
+    if (data.startsWith('sched:') || data.startsWith('sched_refresh:')) {
+      const parts = data.split(':');
+      const mode = parts[1] || 'all';
+      const billId = parts[2];
+      const isForce = data.startsWith('sched_refresh:');
+      await executeScheduleLookup(ctx, storage, billId, mode === 'tom' ? 'tomorrow' : mode, true, isForce);
       return;
     }
 
@@ -1024,7 +1216,7 @@ function createBot(env, executionCtx = null) {
   return { bot, storage };
 }
 
-async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEdit = false) {
+async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEdit = false, forceFresh = false) {
   try {
     const billId = toEnglishDigits(String(rawBillId || '')).replace(/\D/g, '');
     if (!billId || billId.length < 8) {
@@ -1038,17 +1230,24 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
     const customLabel = savedItem ? savedItem.label : '';
     const isBookmarked = Boolean(savedItem);
 
-    const result = await fetchGopedSchedule(billId);
+    const result = await fetchGopedSchedule(billId, forceFresh, storage);
     const text = formatScheduleMessage(result, mode, customLabel);
     const replyMarkup = result.Code === 1 ? getScheduleInlineKeyboard(billId, mode, isBookmarked) : undefined;
 
     if (isEdit && ctx.callbackQuery?.message) {
-      await ctx.editMessageText(text, {
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup
-      }).catch(async () => {
-        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
-      });
+      try {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: replyMarkup
+        });
+      } catch (editErr) {
+        const errMsg = String(editErr?.message || editErr?.description || '');
+        if (errMsg.includes('message is not modified')) {
+          await ctx.answerCallbackQuery({ text: '✅ اطلاعات هم‌اکنون بروز است.' }).catch(() => {});
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
+        }
+      }
     } else {
       await ctx.reply(text, {
         parse_mode: 'HTML',
@@ -1057,13 +1256,19 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
     }
   } catch (err) {
     console.error('[ExecuteScheduleLookup Error]:', err);
-    const errText = `❌ خطا در دریافت اطلاعات از سامانه توزیع برق:\n${err.message || 'پاسخی از سرور دریافت نشد.'}\n\n<i>لطفاً چند لحظه بعد مجدداً تلاش فرمایید.</i>`;
+    let userNotice = 'پاسخی از سرور شرکت توزیع برق دریافت نشد.';
+    const errMsg = String(err?.message || '');
+    if (errMsg.includes('522') || errMsg.includes('502') || errMsg.includes('timed out') || errMsg.includes('abort') || errMsg.includes('fetch failed')) {
+      userNotice = 'سرور شرکت توزیع نیروی برق استان گلستان (goped.ir) در حال حاضر با کندی یا قطعی موقت مواجه است.\nلطفاً چند لحظه بعد مجدداً تلاش فرمایید.';
+    }
+    const errText = `⚠️ <b>خطا در دریافت اطلاعات:</b>\n${userNotice}\n\n<i>برای تلاش مجدد روی دکمه زیر بزنید:</i>`;
+    const retryKb = new InlineKeyboard().text('🔄 تلاش مجدد', `sched_refresh:${mode}:${billId}`);
     if (isEdit && ctx.callbackQuery?.message) {
-      await ctx.editMessageText(errText, { parse_mode: 'HTML' }).catch(async () => {
-        await ctx.reply(errText, { parse_mode: 'HTML' });
+      await ctx.editMessageText(errText, { parse_mode: 'HTML', reply_markup: retryKb }).catch(async () => {
+        await ctx.reply(errText, { parse_mode: 'HTML', reply_markup: retryKb });
       });
     } else {
-      await ctx.reply(errText, { parse_mode: 'HTML' });
+      await ctx.reply(errText, { parse_mode: 'HTML', reply_markup: retryKb });
     }
   }
 }
@@ -1076,7 +1281,7 @@ export default {
     if (url.pathname === '/test-api') {
       try {
         const billId = url.searchParams.get('billId') || '6357330214322';
-        const data = await fetchGopedSchedule(billId);
+        const data = await fetchGopedSchedule(billId, true);
         return new Response(JSON.stringify(data, null, 2), {
           headers: { 'Content-Type': 'application/json; charset=utf-8' }
         });
@@ -1088,14 +1293,19 @@ export default {
       }
     }
 
-    try {
-      const { bot } = createBot(env, ctx);
-      const handleCallback = webhookCallback(bot, 'cloudflare-mod');
-      return await handleCallback(request);
-    } catch (err) {
-      console.error('[Worker Fatal Webhook Error]:', err);
-      return new Response('OK', { status: 200 });
+    if (request.method === 'POST') {
+      try {
+        const update = await request.json();
+        const { bot } = createBot(env, ctx);
+        await bot.handleUpdate(update);
+        return new Response('OK', { status: 200 });
+      } catch (err) {
+        console.error('[Worker Update Error]:', err);
+        return new Response('OK', { status: 200 });
+      }
     }
+
+    return new Response('OK', { status: 200 });
   },
 
   async scheduled(event, env, ctx) {

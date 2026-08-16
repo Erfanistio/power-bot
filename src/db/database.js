@@ -65,7 +65,19 @@ class JsonDatabase {
       };
       this._save();
     }
-    return this.data.users[id];
+    const user = this.data.users[id];
+    if (!user.savedBills) user.savedBills = [];
+    if (!user.notifications) user.notifications = { enabled: true, time: '08:00', lastNotifiedDate: null };
+    
+    // Auto-heal activeBillId if not set or invalid
+    if (user.savedBills.length > 0) {
+      const exists = user.savedBills.some(b => b.billId === user.activeBillId);
+      if (!user.activeBillId || !exists) {
+        user.activeBillId = user.savedBills[0].billId;
+        this._save();
+      }
+    }
+    return user;
   }
 
   updateUser(userId, updates = {}) {

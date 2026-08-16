@@ -4,44 +4,56 @@ import {
   getIranGregorianDate,
   getTodayJalali,
   getPersianWeekdayName,
-  formatTimeShort
+  formatTimeShort,
+  getCurrentTehranTimeShort
 } from '../utils/persianDate.js';
 
 /**
  * Formats a single blackout entry into a clean Persian card.
  */
-export function formatBlackoutCard(blackout, isToday = false, isTomorrow = false) {
+export function formatBlackoutCard(blackout, forceToday = false, forceTomorrow = false) {
   const dateInfo = parseDateInfo(blackout.date);
   const persianDate = toPersianDigits(dateInfo.jalaliStr || blackout.date);
   const weekday = dateInfo.weekday ? ` (${dateInfo.weekday})` : '';
   
+  const isToday = forceToday || dateInfo.isToday;
+  const isTomorrow = forceTomorrow || dateInfo.isTomorrow;
+  const isYesterday = dateInfo.isYesterday;
+
   let prefix = '📅';
   let badge = '';
   if (isToday) {
     prefix = '⚡️';
-    badge = ' 🔴 [امروز]';
+    badge = ' 🔴 <b>[امروز]</b>';
   } else if (isTomorrow) {
     prefix = '⚡️';
-    badge = ' 🟡 [فردا]';
+    badge = ' 🟡 <b>[فردا]</b>';
+  } else if (isYesterday) {
+    badge = ' ⚪️ <i>[گذشته]</i>';
   }
 
   let text = `${prefix} <b>تاریخ:</b> ${persianDate}${weekday}${badge}\n`;
 
-  if (blackout.from && blackout.to) {
-    const fromShort = formatTimeShort(blackout.from);
-    const toShort = formatTimeShort(blackout.to);
-    text += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(fromShort)}</code> تا <code>${toPersianDigits(toShort)}</code>\n`;
+  const fromShort = formatTimeShort(blackout.from);
+  const toShort = formatTimeShort(blackout.to);
+
+  if (fromShort && toShort) {
+    if (fromShort === '00:00' && toShort === '00:00') {
+      text += `   🟢 <b>وضعیت:</b> بدون خاموشی\n`;
+    } else {
+      text += `   ⏳ <b>ساعت خاموشی:</b> <code>${toPersianDigits(fromShort)}</code> تا <code>${toPersianDigits(toShort)}</code>\n`;
+    }
   }
 
-  if (blackout.reserve1From && blackout.reserve1To) {
-    const r1From = formatTimeShort(blackout.reserve1From);
-    const r1To = formatTimeShort(blackout.reserve1To);
+  const r1From = formatTimeShort(blackout.reserve1From);
+  const r1To = formatTimeShort(blackout.reserve1To);
+  if (r1From && r1To && !(r1From === '00:00' && r1To === '00:00')) {
     text += `   ⚠️ <b>نوبت اول احتمالی:</b> <code>${toPersianDigits(r1From)}</code> تا <code>${toPersianDigits(r1To)}</code>\n`;
   }
 
-  if (blackout.reserve2From && blackout.reserve2To) {
-    const r2From = formatTimeShort(blackout.reserve2From);
-    const r2To = formatTimeShort(blackout.reserve2To);
+  const r2From = formatTimeShort(blackout.reserve2From);
+  const r2To = formatTimeShort(blackout.reserve2To);
+  if (r2From && r2To && !(r2From === '00:00' && r2To === '00:00')) {
     text += `   ⚠️ <b>نوبت دوم احتمالی:</b> <code>${toPersianDigits(r2From)}</code> تا <code>${toPersianDigits(r2To)}</code>\n`;
   }
 
@@ -56,11 +68,12 @@ export function formatBlackoutCard(blackout, isToday = false, isTomorrow = false
  */
 export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
   if (!data || !data.success) {
-    return `❌ <b>خطا در دریافت اطلاعات:</b>\n${data?.message || 'اطلاعاتی یافت نشد.'}`;
+    return `❌ <b>خطا در دریافت اطلاعات:</b>\n${data?.message || 'اطلاعاتی یافت نشد.'}\n\n<i>💡 نکته: از صحت شناسه قبض ۱۳ رقمی خود اطمینان حاصل فرمایید.</i>`;
   }
 
   const customer = data.customer || {};
   const blackouts = data.blackouts || [];
+  const queryTime = data.queryTime || getCurrentTehranTimeShort();
 
   const todayGregorian = getIranGregorianDate(0);
   const tomorrowGregorian = getIranGregorianDate(1);
@@ -71,7 +84,7 @@ export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
 
   let header = `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
   if (customLabel) {
-    header += `🏷 <b>عنوان:</b> ${customLabel}\n`;
+    header += `🏷 <b>عنوان نشان:</b> ${customLabel}\n`;
   }
   if (customer.billId) {
     header += `📄 <b>شناسه قبض:</b> <code>${toPersianDigits(customer.billId)}</code>\n`;
@@ -86,14 +99,14 @@ export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
   header += `━━━━━━━━━━━━━━━━━━━━\n`;
 
   // Helper to check date match
-  const matchesDate = (bDate, targetG, targetJ) => {
+  const matchesTarget = (bDate, targetG, targetJ) => {
     const info = parseDateInfo(bDate);
     return info.gregorianStr === targetG || info.jalaliStr === targetJ;
   };
 
   // Filter based on mode
   if (mode === 'today') {
-    const todayBlackouts = blackouts.filter(b => matchesDate(b.date, todayGregorian, todayJalali));
+    const todayBlackouts = blackouts.filter(b => matchesTarget(b.date, todayGregorian, todayJalali));
     let body = `📅 <b>برنامه خاموشی امروز (${todayWeekday} - ${toPersianDigits(todayJalali)}):</b>\n\n`;
 
     if (todayBlackouts.length === 0) {
@@ -105,27 +118,31 @@ export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
       body += `<i>⚠️ توجه: مدت زمان احتمالی خاموشی معمولاً تا ۲ ساعت می‌باشد.</i>\n`;
     }
 
+    body += `\n🕒 <i>استعلام شده در ساعت ${toPersianDigits(queryTime)}</i>`;
+    if (data.warningMessage) body += `\n\n${data.warningMessage}`;
     return header + body;
   }
 
   if (mode === 'tomorrow') {
-    const tomorrowBlackouts = blackouts.filter(b => matchesDate(b.date, tomorrowGregorian, tomorrowJalali));
+    const tomorrowBlackouts = blackouts.filter(b => matchesTarget(b.date, tomorrowGregorian, tomorrowJalali));
     let body = `📅 <b>برنامه خاموشی فردا (${tomorrowWeekday} - ${toPersianDigits(tomorrowJalali)}):</b>\n\n`;
 
     if (tomorrowBlackouts.length === 0) {
-      body += `🟢 <b>برای فردا قطعی برق برنامه‌ریزی‌شده‌ای ثبت نشده است.</b>\n`;
+      body += `🟢 <b>برای فردا هنوز قطعی برق برنامه‌ریزی‌شده‌ای ثبت نشده است.</b>\n`;
     } else {
       tomorrowBlackouts.forEach((b) => {
         body += formatBlackoutCard(b, false, true) + '\n';
       });
-      body += `<i>⚠️ توجه: جدول خاموشی ممکن است در ساعات پایانی روز به‌روزرسانی شود.</i>\n`;
+      body += `<i>⚠️ توجه: جدول خاموشی ممکن است در ساعات پایانی روز یا اوایل صبح به‌روزرسانی شود.</i>\n`;
     }
 
+    body += `\n🕒 <i>استعلام شده در ساعت ${toPersianDigits(queryTime)}</i>`;
+    if (data.warningMessage) body += `\n\n${data.warningMessage}`;
     return header + body;
   }
 
   // All schedules
-  const todayBlackouts = blackouts.filter(b => matchesDate(b.date, todayGregorian, todayJalali));
+  const todayBlackouts = blackouts.filter(b => matchesTarget(b.date, todayGregorian, todayJalali));
   let body = `📋 <b>جدول کامل زمان‌بندی خاموشی:</b>\n\n`;
 
   if (todayBlackouts.length === 0 && blackouts.length > 0) {
@@ -136,13 +153,15 @@ export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
     body += `🟢 در حال حاضر هیچ جدول خاموشی فعالی برای این شناسه در سامانه ثبت نشده است.\n`;
   } else {
     blackouts.forEach(b => {
-      const isToday = matchesDate(b.date, todayGregorian, todayJalali);
-      const isTomorrow = matchesDate(b.date, tomorrowGregorian, tomorrowJalali);
+      const isToday = matchesTarget(b.date, todayGregorian, todayJalali);
+      const isTomorrow = matchesTarget(b.date, tomorrowGregorian, tomorrowJalali);
       body += formatBlackoutCard(b, isToday, isTomorrow) + '\n';
     });
     body += `<i>ℹ️ منبع: سامانه شرکت توزیع نیروی برق استان گلستان</i>\n`;
   }
 
+  body += `🕒 <i>استعلام شده در ساعت ${toPersianDigits(queryTime)}</i>`;
+  if (data.warningMessage) body += `\n\n${data.warningMessage}`;
   return header + body;
 }
 
@@ -154,7 +173,8 @@ export function formatNoticeMessage(noticeData) {
     return `📢 <b>اطلاعیه شرکت توزیع برق:</b>\nدر حال حاضر اطلاعیه جدیدی منتشر نشده است.`;
   }
 
-  return `📢 <b>اطلاعیه شرکت توزیع نیروی برق گلستان:</b>\n\n${noticeData.text}\n\n<i>🌐 سامانه اطلاع‌رسانی: modiriattolid.goped.ir</i>`;
+  const queryTime = noticeData.queryTime ? `\n🕒 <i>بروزرسانی: ${toPersianDigits(noticeData.queryTime)}</i>` : '';
+  return `📢 <b>اطلاعیه شرکت توزیع نیروی برق گلستان:</b>\n\n${noticeData.text}${queryTime}\n\n<i>🌐 سامانه اطلاع‌رسانی: modiriattolid.goped.ir</i>`;
 }
 
 /**
@@ -191,3 +211,4 @@ export function formatSavedBillsList(savedBills = [], activeBillId = null) {
   text += `👇 برای مشاهده آنی برنامه یا مدیریت، روی دکمه‌های زیر بزنید:`;
   return text;
 }
+
