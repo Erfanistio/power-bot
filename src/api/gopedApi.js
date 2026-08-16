@@ -6,20 +6,18 @@ export class GopedApiClient {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     this.authToken = authToken;
     this.timeoutMs = timeoutMs || 12000;
+    // In-memory store: billId -> { data, timestamp }
+    this._store = new Map();
+    // Deduplication of in-flight promises
+    this._inFlight = new Map();
   }
 
   /**
-   * No cache - always returns false.
+   * Check if we have instant data ready in memory.
    */
-  hasFreshCache() {
-    return false;
-  }
-
-  /**
-   * No-op warmup since caching is disabled.
-   */
-  warmupBills() {
-    // No-op
+  hasData(rawBillId) {
+    const billId = this.cleanBillId(rawBillId);
+    return this._store.has(billId);
   }
 
   /**
@@ -32,16 +30,9 @@ export class GopedApiClient {
   }
 
   /**
-   * Clears the in-memory cache.
+   * Performs an HTTP request with strict timeout and keepalive.
    */
-  clearCache() {
-    // No-op
-  }
-
-  /**
-   * Performs an HTTP request with strict 5s timeout and keepalive.
-   */
-  async _fetch(endpoint, options = {}, retries = 0) {
+  async _fetch(endpoint, options = {}) {
     const url = new URL(endpoint, this.baseUrl).toString();
     const headers = {
       'Auth-Token': this.authToken,
@@ -52,44 +43,33 @@ export class GopedApiClient {
       ...(options.headers || {})
     };
 
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
-        const response = await fetch(url, {
-          ...options,
-          headers,
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
 
-        if (!response.ok) {
-          throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        return data;
-      } catch (err) {
-        lastError = err;
-        if (attempt < retries) {
-          // Progressive backoff delay
-          await new Promise(r => setTimeout(r, (attempt + 1) * 700));
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-    }
 
-    throw lastError || new Error('Request failed after retries');
+      const data = await response.json();
+      return data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
+    }
   }
 
   /**
-   * Fetch outage / blackout schedules for a given Bill ID.
-   *
-   * @param {string} rawBillId - Electricity Bill ID (شناسه قبض)
-   * @param {boolean} forceFresh - If true, bypass cache and fetch directly from GOPED API
+   * Fetch outage schedules with SWR (Instant memory return + Background revalidate).
    */
-  async getSchedule(rawBillId) {
+  async getSchedule(rawBillId, forceFresh = false) {
     const billId = this.cleanBillId(rawBillId);
     if (!billId) {
       return {
@@ -100,75 +80,115 @@ export class GopedApiClient {
       };
     }
 
-    try {
-      const data = await this._fetch(`Api/GetSchedule_Web?BillId=${encodeURIComponent(billId)}`);
-      
-      if (!data || data.Code !== 1 || !data.Result) {
+    // Instant return if data exists and not explicitly forcing live reload
+    if (!forceFresh && this._store.has(billId)) {
+      const entry = this._store.get(billId);
+      // Trigger silent background update if older than 90 seconds
+      if (Date.now() - entry.timestamp > 90 * 1000) {
+        this.fetchFresh(billId).catch(() => {});
+      }
+      return { ...entry.data, isInstant: true };
+    }
+
+    return this.fetchFresh(billId);
+  }
+
+  /**
+   * Performs live network fetch from GOPED with deduplication.
+   */
+  async fetchFresh(billId) {
+    // If request already in-flight for this bill, share the promise
+    if (this._inFlight.has(billId)) {
+      return this._inFlight.get(billId);
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        const data = await this._fetch(`Api/GetSchedule_Web?BillId=${encodeURIComponent(billId)}`);
+        
+        if (!data || data.Code !== 1 || !data.Result) {
+          return {
+            success: false,
+            code: data?.Code || -1,
+            message: data?.Description || 'شناسه قبض یافت نشد یا برنامه‌ای برای آن ثبت نشده است.',
+            blackouts: []
+          };
+        }
+
+        const result = data.Result;
+        const customer = result.Customer ? {
+          billId: result.Customer.BillId || billId,
+          name: (result.Customer.Name || '').trim(),
+          mobile: result.Customer.Mobile || '',
+          feederId: result.Customer.FeederId || '',
+          desc: result.Customer.Desc || '',
+          distributionTitle: (result.Customer.DistributionTitle || '').trim()
+        } : null;
+
+        const rawBlackouts = Array.isArray(result.Blackouts) ? result.Blackouts : [];
+        const blackouts = rawBlackouts.map(b => {
+          const dateRaw = b.Date || b.date || '';
+          return {
+            date: dateRaw,
+            from: (b.From || b.from || '').trim(),
+            to: (b.To || b.to || '').trim(),
+            reserve1From: (b.Reserve1From || b.reserve1From || '').trim(),
+            reserve1To: (b.Reserve1To || b.reserve1To || '').trim(),
+            reserve2From: (b.Reserve2From || b.reserve2From || '').trim(),
+            reserve2To: (b.Reserve2To || b.reserve2To || '').trim(),
+            persianDateLastBlackout: b.PersianDateLastBlackout || result.PersianDateLastBlackout || ''
+          };
+        });
+
+        // Sort blackouts chronologically
+        blackouts.sort((a, b) => {
+          const infoA = parseDateInfo(a.date);
+          const infoB = parseDateInfo(b.date);
+          const dateCmp = infoA.gregorianStr.localeCompare(infoB.gregorianStr);
+          if (dateCmp !== 0) return dateCmp;
+          return (a.from || '').localeCompare(b.from || '');
+        });
+
+        const formattedResult = {
+          success: true,
+          code: 1,
+          customer,
+          blackouts,
+          queryTime: getCurrentTehranTimeShort(),
+          persianDateLastBlackout: result.PersianDateLastBlackout || ''
+        };
+
+        // Store in memory
+        this._store.set(billId, {
+          timestamp: Date.now(),
+          data: formattedResult
+        });
+
+        return formattedResult;
+      } catch (err) {
+        // If error but old data exists in store, return old data
+        if (this._store.has(billId)) {
+          return { ...this._store.get(billId).data, isInstant: true };
+        }
+
+        const isTimeout = err.name === 'AbortError' || String(err.message).toLowerCase().includes('abort') || String(err.message).toLowerCase().includes('timeout');
+        const message = isTimeout
+          ? '⏱ متأسفانه سرور شرکت توزیع برق در این لحظه پاسخ نداد. لطفاً لحظاتی بعد مجدداً تلاش کنید.'
+          : `خطا در ارتباط با سرور شرکت توزیع برق: ${err.message}`;
+
         return {
           success: false,
-          code: data?.Code || -1,
-          message: data?.Description || 'شناسه قبض یافت نشد یا برنامه‌ای برای آن ثبت نشده است.',
+          code: -500,
+          message,
           blackouts: []
         };
+      } finally {
+        this._inFlight.delete(billId);
       }
+    })();
 
-      const result = data.Result;
-      const customer = result.Customer ? {
-        billId: result.Customer.BillId || billId,
-        name: (result.Customer.Name || '').trim(),
-        mobile: result.Customer.Mobile || '',
-        feederId: result.Customer.FeederId || '',
-        desc: result.Customer.Desc || '',
-        distributionTitle: (result.Customer.DistributionTitle || '').trim()
-      } : null;
-
-      const rawBlackouts = Array.isArray(result.Blackouts) ? result.Blackouts : [];
-      const blackouts = rawBlackouts.map(b => {
-        const dateRaw = b.Date || b.date || '';
-        return {
-          date: dateRaw,
-          from: (b.From || b.from || '').trim(),
-          to: (b.To || b.to || '').trim(),
-          reserve1From: (b.Reserve1From || b.reserve1From || '').trim(),
-          reserve1To: (b.Reserve1To || b.reserve1To || '').trim(),
-          reserve2From: (b.Reserve2From || b.reserve2From || '').trim(),
-          reserve2To: (b.Reserve2To || b.reserve2To || '').trim(),
-          persianDateLastBlackout: b.PersianDateLastBlackout || result.PersianDateLastBlackout || ''
-        };
-      });
-
-      // Sort blackouts chronologically
-      blackouts.sort((a, b) => {
-        const infoA = parseDateInfo(a.date);
-        const infoB = parseDateInfo(b.date);
-        const dateCmp = infoA.gregorianStr.localeCompare(infoB.gregorianStr);
-        if (dateCmp !== 0) return dateCmp;
-        return (a.from || '').localeCompare(b.from || '');
-      });
-
-      const formattedResult = {
-        success: true,
-        code: 1,
-        customer,
-        blackouts,
-        queryTime: getCurrentTehranTimeShort(),
-        persianDateLastBlackout: result.PersianDateLastBlackout || ''
-      };
-
-      return formattedResult;
-    } catch (err) {
-      const isTimeout = err.name === 'AbortError' || String(err.message).toLowerCase().includes('abort') || String(err.message).toLowerCase().includes('timeout');
-      const message = isTimeout
-        ? '⏱ متأسفانه سرور شرکت توزیع برق در این لحظه پاسخ نداد. لطفاً لحظاتی بعد مجدداً تلاش کنید.'
-        : `خطا در ارتباط با سرور شرکت توزیع برق: ${err.message}`;
-
-      return {
-        success: false,
-        code: -500,
-        message,
-        blackouts: []
-      };
-    }
+    this._inFlight.set(billId, fetchPromise);
+    return fetchPromise;
   }
 
   /**
@@ -248,5 +268,3 @@ export class GopedApiClient {
 }
 
 export const gopedApi = new GopedApiClient();
-
-

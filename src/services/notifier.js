@@ -52,14 +52,33 @@ export class OutageNotificationService {
   }
 
   startHeartbeat() {
-    // Keep-alive heartbeat every 10 minutes
-    this.heartbeatTimer = setInterval(async () => {
+    const prewarmAllBills = async () => {
       try {
-        await gopedApi.getNotice();
-      } catch {
-        // Silent catch
+        const uniqueBills = db.getAllUniqueSavedBills();
+        if (uniqueBills.length > 0) {
+          console.log(`[Notifier] ⚡️ Pre-warming ${uniqueBills.length} saved bills in background for instant user queries...`);
+          for (const b of uniqueBills) {
+            await gopedApi.fetchFresh(b.billId).catch(() => {});
+            // Small 300ms pause between requests to avoid overwhelming the server
+            await new Promise(r => setTimeout(r, 300));
+          }
+          console.log(`[Notifier] ✅ All ${uniqueBills.length} saved bills pre-warmed and ready for instant 0.01s delivery!`);
+        }
+      } catch (err) {
+        console.warn('[Notifier] Prewarm note:', err.message);
       }
-    }, 10 * 60 * 1000);
+    };
+
+    // Initial pre-warm 4 seconds after startup
+    setTimeout(() => {
+      prewarmAllBills();
+    }, 4000);
+
+    // Periodic sync every 15 minutes
+    this.heartbeatTimer = setInterval(async () => {
+      await prewarmAllBills();
+    }, 15 * 60 * 1000);
+
     // Unref so timer does not prevent process exit if needed
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
   }

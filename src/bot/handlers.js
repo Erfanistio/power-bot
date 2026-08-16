@@ -603,10 +603,10 @@ async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false,
   const customLabel = savedItem ? savedItem.label : '';
   const isBookmarked = Boolean(savedItem);
 
-  const hasFreshCache = !forceFresh && gopedApi.hasFreshCache(billId);
+  const hasInstantData = !forceFresh && gopedApi.hasData(billId);
 
   let loadingMsg = null;
-  if (!isEdit && !hasFreshCache) {
+  if (!isEdit && !hasInstantData) {
     loadingMsg = await ctx.reply('⏳ در حال دریافت برنامه خاموشی از سامانه برق گلستان...').catch(() => null);
   }
 
