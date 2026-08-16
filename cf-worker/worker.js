@@ -212,9 +212,9 @@ async function fetchGopedSchedule(billId, forceFresh = false, storage = null) {
   const url = `${GOPED_API_URL}Api/GetSchedule_Web?BillId=${encodeURIComponent(cleanId)}`;
   let lastError = null;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 1; attempt++) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000);
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
       const res = await fetch(url, {
@@ -228,20 +228,10 @@ async function fetchGopedSchedule(billId, forceFresh = false, storage = null) {
       clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (data && data.Code === 1) {
-        memScheduleCache.set(cleanId, { timestamp: now, data });
-        if (storage && typeof storage.saveScheduleCache === 'function') {
-          storage.saveScheduleCache(cleanId, data).catch(() => {});
-        }
-        return data;
-      }
       return data;
     } catch (err) {
       clearTimeout(timeoutId);
       lastError = err;
-      if (attempt === 0) {
-        await new Promise(r => setTimeout(r, 800));
-      }
     }
   }
 

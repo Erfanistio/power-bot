@@ -11,8 +11,8 @@ export const config = {
   apiUrl: process.env.GOPED_API_URL || 'https://api.gymove.ir/',
   authToken: process.env.GOPED_AUTH_TOKEN || '7f3c2a91-6d84-4b17-a5e9-2c0f8d6b31a4',
 
-  // Timeout for API requests in milliseconds (45s to avoid premature abort on slow government servers)
-  apiTimeoutMs: parseInt(process.env.API_TIMEOUT_MS || '45000', 10),
+  // Timeout for API requests in milliseconds (5s max timeout as requested)
+  apiTimeoutMs: parseInt(process.env.API_TIMEOUT_MS || '5000', 10),
 
   // Daily alert notification cron schedule (Default: 08:00 AM Iran Time / 04:30 UTC)
   notificationCron: process.env.NOTIFICATION_CRON || '30 4 * * *',
