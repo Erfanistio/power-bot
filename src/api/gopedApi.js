@@ -213,12 +213,7 @@ export class GopedApiClient {
   /**
    * Fetch the latest public announcement / notice from GOPED.
    */
-  async getNotice(forceFresh = false) {
-    const now = Date.now();
-    if (!forceFresh && this._noticeCache && (now - this._noticeCache.timestamp < this.noticeTtlMs)) {
-      return this._noticeCache.data;
-    }
-
+  async getNotice() {
     try {
       const data = await this._fetch('Api/GetNotice');
       if (data && data.Code === 1 && data.Result) {
@@ -238,11 +233,6 @@ export class GopedApiClient {
           queryTime: getCurrentTehranTimeShort()
         };
 
-        this._noticeCache = {
-          timestamp: now,
-          data: result
-        };
-
         return result;
       }
 
@@ -251,9 +241,6 @@ export class GopedApiClient {
         message: 'اطلاعیه‌ای یافت نشد.'
       };
     } catch (err) {
-      if (this._noticeCache && this._noticeCache.data) {
-        return this._noticeCache.data;
-      }
       return {
         success: false,
         message: `خطا در دریافت اطلاعیه: ${err.message}`
