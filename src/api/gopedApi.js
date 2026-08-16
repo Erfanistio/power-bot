@@ -164,6 +164,7 @@ export class GopedApiClient {
       };
 
       return formattedResult;
+    } catch (err) {
       return {
         success: false,
         code: -500,
