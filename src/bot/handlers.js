@@ -53,12 +53,14 @@ function getPrivateReplyKeyboard(ctx, savedBills = []) {
  * @param {import('../services/notifier.js').OutageNotificationService} [notifierService]
  */
 export function registerBotHandlers(bot, notifierService = null) {
-  // Save user profile info in database on any update
+  // Save user profile info in database and log update on Railway
   bot.use(async (ctx, next) => {
     if (ctx.from) {
       const user = db.getUser(ctx.from.id);
       if (ctx.from.username) user.username = ctx.from.username;
       if (ctx.from.first_name) user.firstName = ctx.from.first_name;
+      const actionText = ctx.message?.text || ctx.callbackQuery?.data || 'action';
+      console.log(`[Railway Bot] 📩 Update from @${ctx.from.username || ctx.from.id} (${ctx.from.first_name || ''}): "${actionText}"`);
     }
     await next();
   });
