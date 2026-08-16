@@ -1,5 +1,6 @@
 import http from 'http';
 import { Bot } from 'grammy';
+import { run, sequentialize } from '@grammyjs/runner';
 import { config } from './config.js';
 import { db } from './db/database.js';
 import { registerBotHandlers } from './bot/handlers.js';
@@ -30,7 +31,7 @@ async function main() {
       res.end(JSON.stringify({
         status: 'online',
         service: 'GOPED Electricity Outage Telegram Bot',
-        platform: 'Railway / Node.js',
+        platform: 'Railway / Node.js (Concurrent Runner)',
         uptimeSeconds: Math.floor(process.uptime()),
         stats,
         timestamp: new Date().toISOString()
@@ -75,7 +76,13 @@ async function main() {
     console.error('[Bot Error]:', err.error || err);
   });
 
-  // 3. Clear any existing webhook (e.g. Cloudflare Worker webhook) before starting long polling
+  // 3. User-level sequentialization: guarantees sequential message order for individual chats,
+  // while allowing 100% PARALLEL execution for all different users!
+  bot.use(sequentialize((ctx) => {
+    return ctx.chat?.id ? [ctx.chat.id.toString()] : undefined;
+  }));
+
+  // 4. Clear any existing webhook before starting long polling runner
   try {
     console.log('🧹 Checking and clearing any previous Telegram Webhooks...');
     const delRes = await bot.api.deleteWebhook({ drop_pending_updates: true });
@@ -84,14 +91,14 @@ async function main() {
     console.warn('⚠️ Webhook delete note:', whErr.message);
   }
 
-  // 4. Initialize and start background notification scheduler
+  // 5. Initialize and start background notification scheduler
   const notifier = new OutageNotificationService(bot);
   notifier.start();
 
-  // 5. Register command and callback handlers
+  // 6. Register command and callback handlers
   registerBotHandlers(bot, notifier);
 
-  // 6. Set bot commands menu for Telegram UI
+  // 7. Set bot commands menu for Telegram UI
   await bot.api.setMyCommands([
     { command: 'start', description: 'شروع و منوی اصلی' },
     { command: 'check', description: 'استعلام قطعی برق (مثال: /check 1234567890123)' },
@@ -106,26 +113,32 @@ async function main() {
     console.warn('⚠️ Warning: Failed to set bot commands on Telegram API:', err.message);
   });
 
-  // 7. Handle graceful shutdowns
+  // 8. Initialize bot metadata
+  await bot.init();
+
+  // 9. Start concurrent multi-threaded runner (up to 50 parallel updates)
+  console.log('🚀 Starting concurrent update runner (no user blocks another)...');
+  const runner = run(bot, {
+    runner: {
+      maxConcurrency: 50
+    }
+  });
+
+  console.log(`🤖 Bot @${bot.botInfo.username} (${bot.botInfo.first_name}) is running concurrently!`);
+
+  // 10. Handle graceful shutdowns
   const shutdown = async () => {
     console.log('\n🛑 Shutting down bot...');
     notifier.stop();
     httpServer.close();
-    await bot.stop();
+    if (runner && runner.isRunning()) {
+      await runner.stop();
+    }
     process.exit(0);
   };
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-
-  // 8. Start polling for updates
-  console.log('🚀 Bot is running and listening for Telegram updates...');
-  await bot.start({
-    drop_pending_updates: true,
-    onStart(botInfo) {
-      console.log(`🤖 Bot @${botInfo.username} (${botInfo.first_name}) started successfully!`);
-    }
-  });
 }
 
 main().catch(err => {
