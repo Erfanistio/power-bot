@@ -468,15 +468,15 @@ function getMainReplyKeyboard(savedBills = []) {
     kb.row();
   }
 
-  kb.text('⚡️ خاموشی امروز').text('🗓 خاموشی فردا')
+  kb.text('🏠 صفحه اصلی')
+    .row()
+    .text('⚡️ خاموشی امروز').text('🗓 خاموشی فردا')
     .row()
     .text('📋 کل برنامه هفتگی').text('🔖 نشان‌شده‌های من')
     .row()
     .text('🔔 هشدار خودکار').text('📢 اطلاعیه‌ها')
     .row()
-    .text('🏠 صفحه اصلی').text('➕ افزودن نشان جدید')
-    .row()
-    .text('ℹ️ راهنما')
+    .text('➕ افزودن نشان جدید').text('ℹ️ راهنما')
     .resized();
 
   return kb;
