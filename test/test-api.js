@@ -13,7 +13,7 @@ import {
 import { db } from '../src/db/database.js';
 import { gopedApi } from '../src/api/gopedApi.js';
 import { formatScheduleMessage, formatNoticeMessage, formatBlackoutCard } from '../src/bot/formatters.js';
-import { getChatTargetId, isGroupChat, parseNotificationSetting } from '../src/bot/handlers.js';
+import { getChatTargetId, isGroupChat, parseNotificationSetting, registerBotHandlers } from '../src/bot/handlers.js';
 import { getScheduleInlineKeyboard } from '../src/bot/keyboards.js';
 import { OutageNotificationService } from '../src/services/notifier.js';
 
@@ -139,8 +139,129 @@ async function runTests() {
   db.deleteUser(testGroupId);
   console.log('  ✅ Group storage, Cron delivery, and admin-safe controls passed.\n');
 
-  // Test 6: Live GOPED API Schedule & Notice
-  console.log('Test 6: GOPED API Live Schedule & Notice Check');
+  // Test 6: Group freeform messages stay silent, while direct bill IDs still query
+  console.log('Test 6: Group Freeform Message Routing');
+  const routes = [];
+  const fakeBot = {
+    use(handler) {
+      routes.push({ matches: () => true, handler });
+    },
+    command(commands, handler) {
+      const allowed = new Set(Array.isArray(commands) ? commands : [commands]);
+      routes.push({
+        matches: ctx => {
+          const match = String(ctx.message?.text || '').match(/^\/([^\s@]+)(?:@[^\s]+)?/);
+          return Boolean(match && allowed.has(match[1]));
+        },
+        handler
+      });
+    },
+    hears(trigger, handler) {
+      const triggers = Array.isArray(trigger) ? trigger : [trigger];
+      routes.push({ matches: ctx => triggers.includes(ctx.message?.text), handler });
+    },
+    on(filter, handler) {
+      routes.push({
+        matches: ctx => filter === 'message:text'
+          ? typeof ctx.message?.text === 'string'
+          : filter === 'my_chat_member' && Boolean(ctx.myChatMember),
+        handler
+      });
+    },
+    async dispatch(ctx) {
+      const run = async startIndex => {
+        for (let index = startIndex; index < routes.length; index++) {
+          const route = routes[index];
+          if (route.matches(ctx)) {
+            await route.handler(ctx, () => run(index + 1));
+            return;
+          }
+        }
+      };
+      await run(0);
+    }
+  };
+  registerBotHandlers(fakeBot);
+
+  const groupReplies = [];
+  const makeTextCtx = (text, chatType = 'supergroup') => ({
+    chat: {
+      id: chatType === 'private' ? testUserId : testGroupId,
+      type: chatType,
+      title: chatType === 'private' ? undefined : 'گروه تست'
+    },
+    from: { id: testUserId },
+    message: { text },
+    api: { deleteMessage: async () => {} },
+    reply: async (...args) => {
+      groupReplies.push(args);
+      return { message_id: groupReplies.length };
+    }
+  });
+
+  const queriedBillIds = [];
+  const originalGroupGetSchedule = gopedApi.getSchedule;
+  try {
+    gopedApi.getSchedule = async billId => {
+      queriedBillIds.push(billId);
+      return { success: true, customer: { billId }, blackouts: [] };
+    };
+
+    for (const chatType of ['group', 'supergroup']) {
+      await fakeBot.dispatch(makeTextCtx('سلام دوستان، وقت بخیر', chatType));
+      await fakeBot.dispatch(makeTextCtx('شماره تماس 09111234567 است', chatType));
+      await fakeBot.dispatch(makeTextCtx('قبض: 1234567890123', chatType));
+      await fakeBot.dispatch(makeTextCtx('خانه', chatType));
+      await fakeBot.dispatch(makeTextCtx('راهنما', chatType));
+      if (groupReplies.length !== 0 || queriedBillIds.length !== 0) {
+        throw new Error(`Ordinary, menu, help, or embedded-number ${chatType} text was not ignored`);
+      }
+    }
+
+    // A private menu/state must neither be opened nor consumed from a group.
+    await fakeBot.dispatch(makeTextCtx('افزودن نشان جدید', 'group'));
+    if (groupReplies.length !== 0) {
+      throw new Error('Add-bookmark menu was allowed to start inside a group');
+    }
+
+    await fakeBot.dispatch(makeTextCtx('1234567890123', 'group'));
+    await fakeBot.dispatch(makeTextCtx('۹۸۷۶۵۴۳۲۱۰۱۲۳', 'supergroup'));
+    if (queriedBillIds.join(',') !== '1234567890123,9876543210123') {
+      throw new Error(`Pure 13-digit group IDs were not queried correctly: ${queriedBillIds.join(',')}`);
+    }
+
+    groupReplies.length = 0;
+    await fakeBot.dispatch(makeTextCtx('یک متن نامعتبر', 'private'));
+    if (!groupReplies[0]?.[0]?.startsWith('❓ متوجه دستور نشدم.')) {
+      throw new Error('Private chat no longer receives the unknown-command fallback');
+    }
+
+    groupReplies.length = 0;
+    await fakeBot.dispatch(makeTextCtx('خانه', 'private'));
+    await fakeBot.dispatch(makeTextCtx('راهنما', 'private'));
+    if (groupReplies.length < 2) {
+      throw new Error('Private home/help hears handlers were blocked by the group text gate');
+    }
+
+    // State HTML interpolation must remain safe for user-provided labels.
+    groupReplies.length = 0;
+    await fakeBot.dispatch(makeTextCtx('افزودن نشان جدید', 'private'));
+    await fakeBot.dispatch(makeTextCtx('1111111111111', 'private'));
+    await fakeBot.dispatch(makeTextCtx('<b>خانه</b> & مغازه', 'private'));
+    const unsafeHtmlReply = groupReplies.find(([message]) => String(message).includes('<b><b>خانه</b>'));
+    const escapedHtmlReply = groupReplies.find(([message]) => String(message).includes('&lt;b&gt;خانه&lt;/b&gt; &amp; مغازه'));
+    if (unsafeHtmlReply || !escapedHtmlReply) {
+      throw new Error('User-provided bookmark label was not HTML-escaped in state replies');
+    }
+  } finally {
+    gopedApi.getSchedule = originalGroupGetSchedule;
+    db.deleteUser(testGroupId);
+    db.deleteUser(testUserId);
+  }
+  console.log('  ✅ Groups only query pure 13-digit IDs; menu/state bypass and HTML escaping passed.\n');
+
+  // Test 7: Live GOPED API Schedule & Notice
+  console.log('Test 7: GOPED API Live Schedule & Notice Check');
   try {
     const notice = await gopedApi.getNotice(true);
     console.log('  Live Notice:', notice.success ? 'OK' : 'NO NOTICE');
@@ -159,8 +280,8 @@ async function runTests() {
   }
   console.log('  ✅ GOPED API live tests completed.\n');
 
-  // Test 7: Formatter Validation
-  console.log('Test 7: Formatter & Filter Validation');
+  // Test 8: Formatter Validation
+  console.log('Test 8: Formatter & Filter Validation');
   const mockSchedule = {
     success: true,
     code: 1,

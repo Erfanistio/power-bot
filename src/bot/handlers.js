@@ -611,6 +611,17 @@ export function registerBotHandlers(bot, notifierService = null) {
     });
   });
 
+  // Commands above keep their normal group behavior. For all remaining text,
+  // stop group chatter before any private-menu hears/state handler can consume it.
+  bot.use(async (ctx, next) => {
+    if (!isGroupChat(ctx) || typeof ctx.message?.text !== 'string') {
+      await next();
+      return;
+    }
+    const groupText = toEnglishDigits(ctx.message.text.trim());
+    if (/^\d{13}$/.test(groupText)) await next();
+  });
+
   // Handle Main Menu Button Texts
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
     const user = db.getUser(getChatTargetId(ctx));
@@ -660,6 +671,7 @@ export function registerBotHandlers(bot, notifierService = null) {
   });
 
   bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید', 'افزودن نشان جدید', 'افزودن شناسه جدید'], async (ctx) => {
+    if (isGroupChat(ctx)) return;
     userStates.set(getConversationStateKey(ctx), { step: 'awaiting_bill_id' });
     await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
   });
@@ -685,6 +697,17 @@ export function registerBotHandlers(bot, notifierService = null) {
   // Handle Freeform Text (Bill IDs, Bookmark button clicks, States, etc.)
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
+
+    // Group messages must bypass private bookmark/conversation state entirely.
+    // Only a standalone 13-digit bill ID is considered addressed to the bot.
+    if (isGroupChat(ctx)) {
+      const groupBillId = toEnglishDigits(text);
+      if (/^\d{13}$/.test(groupBillId)) {
+        await handleScheduleQuery(ctx, groupBillId, 'all');
+      }
+      return;
+    }
+
     const targetId = getChatTargetId(ctx);
     const stateKey = getConversationStateKey(ctx);
     const user = db.getUser(targetId);
@@ -731,7 +754,7 @@ export function registerBotHandlers(bot, notifierService = null) {
         db.addBillId(targetId, billId, label);
         const updatedUser = db.getUser(targetId);
         await ctx.reply(
-          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(label)}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         // Immediately fetch full schedule
@@ -746,7 +769,7 @@ export function registerBotHandlers(bot, notifierService = null) {
         db.addBillId(targetId, billId, label);
         const updatedUser = db.getUser(targetId);
         await ctx.reply(
-          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> نشان شد!`,
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(label)}</b> نشان شد!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         // Immediately fetch full schedule
@@ -761,7 +784,7 @@ export function registerBotHandlers(bot, notifierService = null) {
         db.renameBillId(targetId, billId, newLabel);
         const updatedUser = db.getUser(targetId);
         await ctx.reply(
-          `✏️ نام نشان با موفقیت به <b>${newLabel}</b> تغییر یافت!`,
+          `✏️ نام نشان با موفقیت به <b>${escapeHtml(newLabel)}</b> تغییر یافت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         await handleSavedBillsQuery(ctx);

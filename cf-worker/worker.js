@@ -1240,6 +1240,17 @@ function createBot(env, executionCtx = null) {
     });
   });
 
+  // Commands above keep their normal group behavior. For all remaining text,
+  // stop group chatter before any private-menu hears/state handler can consume it.
+  bot.use(async (ctx, next) => {
+    if (!isGroupChat(ctx) || typeof ctx.message?.text !== 'string') {
+      await next();
+      return;
+    }
+    const groupText = toEnglishDigits(ctx.message.text.trim());
+    if (/^\d{13}$/.test(groupText)) await next();
+  });
+
   // Main Menu Buttons
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
     const user = await storage.getUser(getChatTargetId(ctx));
@@ -1282,6 +1293,7 @@ function createBot(env, executionCtx = null) {
   });
 
   bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید'], async (ctx) => {
+    if (isGroupChat(ctx)) return;
     await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
     await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
   });
@@ -1310,6 +1322,7 @@ function createBot(env, executionCtx = null) {
   });
 
   bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید', 'افزودن نشان جدید', 'افزودن شناسه جدید'], async (ctx) => {
+    if (isGroupChat(ctx)) return;
     await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
     await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
   });
@@ -1341,6 +1354,17 @@ function createBot(env, executionCtx = null) {
   // Message & State Handler
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
+
+    // Group messages must bypass private bookmark/conversation state entirely.
+    // Only a standalone 13-digit bill ID is considered addressed to the bot.
+    if (isGroupChat(ctx)) {
+      const groupBillId = toEnglishDigits(text);
+      if (/^\d{13}$/.test(groupBillId)) {
+        await executeScheduleLookup(ctx, storage, groupBillId, 'all');
+      }
+      return;
+    }
+
     const userId = ctx.from.id;
     const user = await storage.getUser(userId);
     const state = await storage.getState(userId);
@@ -1390,7 +1414,7 @@ function createBot(env, executionCtx = null) {
         await storage.addBillId(userId, billId, label);
         const updatedUser = await storage.getUser(userId);
         await ctx.reply(
-          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(label)}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         await executeScheduleLookup(ctx, storage, billId, 'all');
@@ -1404,7 +1428,7 @@ function createBot(env, executionCtx = null) {
         await storage.addBillId(userId, billId, label);
         const updatedUser = await storage.getUser(userId);
         await ctx.reply(
-          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> نشان شد!`,
+          `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(label)}</b> نشان شد!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         await executeScheduleLookup(ctx, storage, billId, 'all');
@@ -1418,7 +1442,7 @@ function createBot(env, executionCtx = null) {
         await storage.renameBillId(userId, billId, newLabel);
         const updatedUser = await storage.getUser(userId);
         await ctx.reply(
-          `✏️ نام نشان با موفقیت به <b>${newLabel}</b> تغییر یافت!`,
+          `✏️ نام نشان با موفقیت به <b>${escapeHtml(newLabel)}</b> تغییر یافت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
         );
         const listText = formatSavedBillsList(updatedUser.savedBills, updatedUser.activeBillId);
