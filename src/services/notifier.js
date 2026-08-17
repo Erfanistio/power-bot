@@ -11,6 +11,7 @@ import {
   formatTimeShort
 } from '../utils/persianDate.js';
 import { formatBlackoutCard } from '../bot/formatters.js';
+import { escapeHtml } from '../utils/html.js';
 
 export class OutageNotificationService {
   constructor(bot) {
@@ -106,19 +107,20 @@ export class OutageNotificationService {
     }
 
     this.isRunning = true;
+    try {
     const todayGregorian = getIranGregorianDate(0);
     const todayJalali = getTodayJalali(0);
     const todayWeekday = getPersianWeekdayName(0);
 
     let users = [];
-    if (targetUserId) {
+    if (targetUserId !== null && targetUserId !== undefined) {
       const single = db.getUser(targetUserId);
       if (single) users = [single];
     } else {
       users = db.getAllSubscribedUsers();
     }
 
-    console.log(`[Notifier] Checking ${users.length} user(s) for date ${todayJalali} (${todayGregorian})`);
+    console.log(`[Notifier] Checking ${users.length} target(s) for date ${todayJalali} (${todayGregorian})`);
 
     let totalNotified = 0;
     let totalFailed = 0;
@@ -158,7 +160,7 @@ export class OutageNotificationService {
 
           if (todayBlackouts.length > 0) {
             hasTodayOutage = true;
-            let billBlock = `🏷 <b>${savedBill.label}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
+            let billBlock = `🏷 <b>${escapeHtml(savedBill.label)}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
             todayBlackouts.forEach(b => {
               billBlock += formatBlackoutCard(b, true, false) + '\n';
             });
@@ -178,20 +180,27 @@ export class OutageNotificationService {
             await this.bot.api.sendMessage(user.userId, fullAlert, { parse_mode: 'HTML' });
             db.setLastNotifiedDate(user.userId, todayJalali);
             totalNotified++;
-            console.log(`[Notifier] Alert successfully sent to user ${user.userId}`);
+            console.log(`[Notifier] Alert successfully sent to target ${user.userId}`);
           } catch (sendErr) {
             const desc = sendErr.description || sendErr.message || '';
-            if (desc.includes('bot was blocked') || desc.includes('user is deactivated') || desc.includes('chat not found')) {
-              console.warn(`[Notifier] User ${user.userId} blocked bot or account deactivated. Disabling notifications.`);
+            if (
+              desc.includes('bot was blocked') ||
+              desc.includes('user is deactivated') ||
+              desc.includes('chat not found') ||
+              desc.includes('kicked from') ||
+              desc.includes('not a member') ||
+              desc.includes('Forbidden')
+            ) {
+              console.warn(`[Notifier] Target ${user.userId} inaccessible (${desc}). Disabling notifications.`);
               db.setNotifications(user.userId, false);
             } else {
-              console.error(`[Notifier] Error sending message to user ${user.userId}:`, desc);
+              console.error(`[Notifier] Error sending message to target ${user.userId}:`, desc);
             }
             totalFailed++;
           }
         }
       } catch (err) {
-        console.error(`[Notifier] Failed to process user ${user.userId}:`, err.message);
+        console.error(`[Notifier] Failed to process target ${user.userId}:`, err.message);
         totalFailed++;
       }
 
@@ -199,7 +208,6 @@ export class OutageNotificationService {
       await new Promise(r => setTimeout(r, 100));
     }
 
-    this.isRunning = false;
     console.log(`[Notifier] Notification check finished. Sent: ${totalNotified}, Failed/Skipped: ${totalFailed}`);
     return {
       totalChecked: users.length,
@@ -207,6 +215,8 @@ export class OutageNotificationService {
       totalFailed,
       dateJalali: todayJalali
     };
+    } finally {
+      this.isRunning = false;
+    }
   }
 }
-

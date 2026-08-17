@@ -7,6 +7,7 @@ import {
   formatTimeShort,
   getCurrentTehranTimeShort
 } from '../utils/persianDate.js';
+import { escapeHtml } from '../utils/html.js';
 
 /**
  * Formats a single blackout entry into a clean Persian card.
@@ -84,17 +85,17 @@ export function formatScheduleMessage(data, mode = 'all', customLabel = '') {
 
   let header = `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
   if (customLabel) {
-    header += `🏷 <b>عنوان نشان:</b> ${customLabel}\n`;
+    header += `🏷 <b>عنوان نشان:</b> ${escapeHtml(customLabel)}\n`;
   }
   if (customer.billId) {
     header += `📄 <b>شناسه قبض:</b> <code>${toPersianDigits(customer.billId)}</code>\n`;
   }
   if (customer.name) {
-    header += `👤 <b>مشترک:</b> ${customer.name}\n`;
+    header += `👤 <b>مشترک:</b> ${escapeHtml(customer.name)}\n`;
   }
   if (customer.distributionTitle || customer.desc) {
     const loc = [customer.distributionTitle, customer.desc].filter(Boolean).join(' - ');
-    header += `📍 <b>منطقه / امور:</b> ${loc}\n`;
+    header += `📍 <b>منطقه / امور:</b> ${escapeHtml(loc)}\n`;
   }
   header += `━━━━━━━━━━━━━━━━━━━━\n`;
 
@@ -217,10 +218,9 @@ export function formatSavedBillsList(savedBills = [], activeBillId = null) {
   let text = `🔖 <b>قبض‌های نشان‌شده شما (Bookmarks):</b>\n\n`;
   savedBills.forEach((b, idx) => {
     const isActive = b.billId === activeBillId ? ' ⭐️ (فعال)' : '';
-    text += `${toPersianDigits(idx + 1)}. <b>${b.label}</b>${isActive}\n   📄 شناسه: <code>${toPersianDigits(b.billId)}</code>\n\n`;
+    text += `${toPersianDigits(idx + 1)}. <b>${escapeHtml(b.label)}</b>${isActive}\n   📄 شناسه: <code>${toPersianDigits(b.billId)}</code>\n\n`;
   });
 
   text += `👇 برای مشاهده آنی برنامه یا مدیریت، روی دکمه‌های زیر بزنید:`;
   return text;
 }
-

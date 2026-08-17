@@ -102,12 +102,13 @@ async function main() {
   await bot.api.setMyCommands([
     { command: 'start', description: 'شروع و منوی اصلی' },
     { command: 'check', description: 'استعلام قطعی برق (مثال: /check 1234567890123)' },
+    { command: 'setbill', description: 'تنظیم شناسه قبض برای گروه یا حساب شما' },
+    { command: 'today', description: 'برنامه قطعی برق امروز' },
+    { command: 'tomorrow', description: 'برنامه قطعی برق فردا' },
+    { command: 'groupinfo', description: 'مشاهده مشخصات و وضعیت هشدار گروه' },
+    { command: 'notif', description: 'فعال/غیرفعال‌سازی هشدار روزانه' },
     { command: 'bookmarks', description: 'لیست و مدیریت قبض‌های نشان‌شده' },
-    { command: 'bookmark', description: 'افزودن شناسه قبض جدید' },
     { command: 'notice', description: 'آخرین اطلاعیه‌های شرکت توزیع' },
-    { command: 'shout', description: 'ارسال پیام همگانی به همه کاربران (ادمین)' },
-    { command: 'users', description: 'مشاهده آمار و لیست کاربران (ادمین)' },
-    { command: 'testnotif', description: 'تست ارسال هشدار روزانه (ادمین)' },
     { command: 'help', description: 'راهنما' }
   ]).catch(err => {
     console.warn('⚠️ Warning: Failed to set bot commands on Telegram API:', err.message);

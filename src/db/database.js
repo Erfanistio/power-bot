@@ -103,15 +103,18 @@ class JsonDatabase {
 
   getUser(userId) {
     const id = String(userId);
+    const isGroup = id.startsWith('-');
     if (!this.data.users[id]) {
       this.data.users[id] = {
         userId: id,
         username: '',
         firstName: '',
+        title: '',
+        isGroup,
         savedBills: [],
         activeBillId: null,
         notifications: {
-          enabled: true, // Default to true so users receive daily outage alerts
+          enabled: true, // Default to true so users and groups receive daily outage alerts
           time: '08:00',
           lastNotifiedDate: null
         },
@@ -123,6 +126,7 @@ class JsonDatabase {
     const user = this.data.users[id];
     if (!user.savedBills) user.savedBills = [];
     if (!user.notifications) user.notifications = { enabled: true, time: '08:00', lastNotifiedDate: null };
+    if (typeof user.isGroup !== 'boolean') user.isGroup = isGroup;
     
     // Auto-heal activeBillId if not set or invalid
     if (user.savedBills.length > 0) {
@@ -133,6 +137,44 @@ class JsonDatabase {
       }
     }
     return user;
+  }
+
+  getChat(chatId) {
+    return this.getUser(chatId);
+  }
+
+  migrateChat(oldChatId, newChatId) {
+    const oldId = String(oldChatId);
+    const newId = String(newChatId);
+    if (oldId === newId) return this.getUser(newId);
+
+    const oldChat = this.data.users[oldId];
+    const newChat = this.data.users[newId];
+    if (!oldChat) return this.getUser(newId);
+
+    const mergedBills = [];
+    const seenBills = new Set();
+    for (const bill of [...(oldChat.savedBills || []), ...(newChat?.savedBills || [])]) {
+      if (!bill?.billId || seenBills.has(bill.billId)) continue;
+      seenBills.add(bill.billId);
+      mergedBills.push(bill);
+    }
+
+    const migrated = {
+      ...oldChat,
+      ...(newChat || {}),
+      userId: newId,
+      isGroup: true,
+      savedBills: mergedBills,
+      activeBillId: newChat?.activeBillId || oldChat.activeBillId || mergedBills[0]?.billId || null,
+      notifications: newChat?.notifications || oldChat.notifications,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.data.users[newId] = migrated;
+    delete this.data.users[oldId];
+    this._save();
+    return migrated;
   }
 
   updateUser(userId, updates = {}) {
@@ -249,19 +291,33 @@ class JsonDatabase {
   }
 
   getStats() {
-    const allUsers = Object.values(this.data.users);
+    const all = Object.values(this.data.users);
+    let totalUsers = 0;
+    let totalGroups = 0;
     let totalSavedBills = 0;
     let subscribedUsers = 0;
+    let subscribedGroups = 0;
 
-    allUsers.forEach(u => {
+    all.forEach(u => {
+      const isGrp = u.isGroup || String(u.userId).startsWith('-');
+      if (isGrp) {
+        totalGroups++;
+        if (u.notifications?.enabled && u.savedBills?.length > 0) subscribedGroups++;
+      } else {
+        totalUsers++;
+        if (u.notifications?.enabled && u.savedBills?.length > 0) subscribedUsers++;
+      }
       if (u.savedBills) totalSavedBills += u.savedBills.length;
-      if (u.notifications?.enabled) subscribedUsers++;
     });
 
     return {
-      totalUsers: allUsers.length,
+      totalUsers,
+      totalGroups,
+      totalTargets: all.length,
       totalSavedBills,
-      subscribedUsers
+      subscribedUsers,
+      subscribedGroups,
+      subscribedTargets: subscribedUsers + subscribedGroups
     };
   }
 

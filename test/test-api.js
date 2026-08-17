@@ -13,6 +13,9 @@ import {
 import { db } from '../src/db/database.js';
 import { gopedApi } from '../src/api/gopedApi.js';
 import { formatScheduleMessage, formatNoticeMessage, formatBlackoutCard } from '../src/bot/formatters.js';
+import { getChatTargetId, isGroupChat, parseNotificationSetting } from '../src/bot/handlers.js';
+import { getScheduleInlineKeyboard } from '../src/bot/keyboards.js';
+import { OutageNotificationService } from '../src/services/notifier.js';
 
 async function runTests() {
   console.log('🧪 Running Comprehensive Power Bot Test Suite...\n');
@@ -63,7 +66,8 @@ async function runTests() {
 
   // Test 4: Database operations & Active Bill Healing
   console.log('Test 4: Database Operations & Active Bill Healing');
-  const testUserId = 999888777;
+  const testUserId = 900000000000 + process.pid;
+  db.deleteUser(testUserId);
   const user = db.getUser(testUserId);
   if (!user || user.userId !== String(testUserId)) throw new Error('getUser failed');
 
@@ -77,10 +81,66 @@ async function runTests() {
   db.removeBillId(testUserId, '9876543210123');
   const afterRemove = db.getUser(testUserId);
   if (afterRemove.savedBills.some(b => b.billId === '9876543210123')) throw new Error('removeBillId failed');
+  db.deleteUser(testUserId);
   console.log('  ✅ Database bookmark management & activeBillId auto-healing passed.\n');
 
-  // Test 5: Live GOPED API Schedule & Notice
-  console.log('Test 5: GOPED API Live Schedule & Notice Check');
+  // Test 5: Group-scoped storage and notification controls
+  console.log('Test 5: Group Storage & Notification Controls');
+  const testGroupId = -100999888777;
+  db.deleteUser(testGroupId);
+  const group = db.getUser(testGroupId);
+  if (!group.isGroup) throw new Error('Negative Telegram chat ID was not recognized as a group');
+
+  db.addBillId(testGroupId, '1234567890123', 'ساختمان تست');
+  db.setNotifications(testGroupId, true);
+  const savedGroup = db.getUser(testGroupId);
+  if (savedGroup.activeBillId !== '1234567890123') throw new Error('Group active bill was not saved');
+  if (!db.getAllSubscribedUsers().some(item => item.userId === String(testGroupId))) {
+    throw new Error('Subscribed group was not included in cron targets');
+  }
+
+  const groupCtx = { chat: { id: testGroupId, type: 'supergroup' }, from: { id: testUserId } };
+  if (!isGroupChat(groupCtx) || getChatTargetId(groupCtx) !== testGroupId) {
+    throw new Error('Group chat target resolution failed');
+  }
+  if (parseNotificationSetting('/notif off') !== false || parseNotificationSetting('/notif غیرفعال') !== false) {
+    throw new Error('Notification disable parsing failed');
+  }
+  if (parseNotificationSetting('/notif on') !== true || parseNotificationSetting('/notif فعال') !== true) {
+    throw new Error('Notification enable parsing failed');
+  }
+
+  const groupScheduleKeyboard = getScheduleInlineKeyboard('1234567890123', 'all', true, false);
+  const callbackData = groupScheduleKeyboard.inline_keyboard.flat().map(button => button.callback_data);
+  if (callbackData.some(data => data?.startsWith('rename_prompt:') || data?.startsWith('delete_bill_do:'))) {
+    throw new Error('Group schedule keyboard exposed bookmark management actions');
+  }
+
+  const originalGetSchedule = gopedApi.getSchedule;
+  const sentMessages = [];
+  try {
+    gopedApi.getSchedule = async billId => ({
+      success: true,
+      customer: { billId },
+      blackouts: [{ date: getIranGregorianDate(0), from: '10:00:00', to: '11:00:00' }]
+    });
+    const notifier = new OutageNotificationService({
+      api: {
+        sendMessage: async (...args) => sentMessages.push(args)
+      }
+    });
+    const result = await notifier.checkAndNotifyAll(true, testGroupId);
+    if (result.totalNotified !== 1 || sentMessages[0]?.[0] !== String(testGroupId)) {
+      throw new Error('Cron notification was not sent to the Telegram group chat ID');
+    }
+  } finally {
+    gopedApi.getSchedule = originalGetSchedule;
+  }
+  db.deleteUser(testGroupId);
+  console.log('  ✅ Group storage, Cron delivery, and admin-safe controls passed.\n');
+
+  // Test 6: Live GOPED API Schedule & Notice
+  console.log('Test 6: GOPED API Live Schedule & Notice Check');
   try {
     const notice = await gopedApi.getNotice(true);
     console.log('  Live Notice:', notice.success ? 'OK' : 'NO NOTICE');
@@ -99,8 +159,8 @@ async function runTests() {
   }
   console.log('  ✅ GOPED API live tests completed.\n');
 
-  // Test 6: Formatter Validation
-  console.log('Test 6: Formatter & Filter Validation');
+  // Test 7: Formatter Validation
+  console.log('Test 7: Formatter & Filter Validation');
   const mockSchedule = {
     success: true,
     code: 1,
@@ -156,4 +216,3 @@ runTests().catch(err => {
   console.error('❌ Test failed:', err);
   process.exit(1);
 });
-

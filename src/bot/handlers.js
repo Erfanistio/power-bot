@@ -16,6 +16,7 @@ import {
   getNotificationSettingsKeyboard
 } from './keyboards.js';
 import { config } from '../config.js';
+import { escapeHtml } from '../utils/html.js';
 import {
   toEnglishDigits,
   toPersianDigits,
@@ -26,6 +27,26 @@ import {
 // In-memory conversation state for step-by-step inputs (e.g. adding a bill with label)
 const userStates = new Map();
 
+export function isGroupChat(ctx) {
+  return ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+}
+
+export function getChatTargetId(ctx) {
+  return isGroupChat(ctx) ? ctx.chat.id : ctx.from.id;
+}
+
+export function getConversationStateKey(ctx) {
+  return `${ctx.chat?.id ?? 'unknown'}:${ctx.from?.id ?? 'unknown'}`;
+}
+
+export function parseNotificationSetting(text = '') {
+  const args = String(text).trim().toLowerCase().split(/\s+/).slice(1);
+  if (args.join(' ').includes('غیر فعال')) return false;
+  if (args.some(arg => ['off', 'disable', '0', 'خاموش', 'غیرفعال'].includes(arg))) return false;
+  if (args.some(arg => ['on', 'enable', '1', 'روشن', 'فعال'].includes(arg))) return true;
+  return null;
+}
+
 /**
  * Checks if a Telegram user is an authorized bot admin.
  */
@@ -35,6 +56,27 @@ function isUserAdmin(userId) {
     return config.adminIds.includes(idStr);
   }
   return false;
+}
+
+/**
+ * Checks if sender is an authorized group admin, group creator, or bot superadmin.
+ * In private chats, always returns true.
+ */
+async function isGroupAdmin(ctx) {
+  if (!ctx.chat || ctx.chat.type === 'private') {
+    return true;
+  }
+  if (!ctx.from) return false;
+  if (ctx.senderChat?.id === ctx.chat.id) return true;
+  if (isUserAdmin(ctx.from.id)) return true;
+
+  try {
+    const member = await ctx.getChatMember(ctx.from.id);
+    return member && (member.status === 'creator' || member.status === 'administrator');
+  } catch (err) {
+    console.warn('[Group Admin Check]:', err.message);
+    return false;
+  }
 }
 
 /**
@@ -54,21 +96,57 @@ function getPrivateReplyKeyboard(ctx, savedBills = []) {
  * @param {import('../services/notifier.js').OutageNotificationService} [notifierService]
  */
 export function registerBotHandlers(bot, notifierService = null) {
-  // Save user profile info in database and log update on Railway
+  // Save user & group profile info in database and log updates on Railway
   bot.use(async (ctx, next) => {
-    if (ctx.from) {
-      const user = db.getUser(ctx.from.id);
-      if (ctx.from.username) user.username = ctx.from.username;
-      if (ctx.from.first_name) user.firstName = ctx.from.first_name;
+    if (ctx.chat) {
+      const isGroup = isGroupChat(ctx);
+      const migratedChatId = ctx.message?.migrate_to_chat_id;
+      const previousChatId = ctx.message?.migrate_from_chat_id;
+      if (migratedChatId) db.migrateChat(ctx.chat.id, migratedChatId);
+      if (previousChatId) db.migrateChat(previousChatId, ctx.chat.id);
+      const targetId = migratedChatId || ctx.chat.id;
+      const target = db.getUser(targetId);
+      const updates = {};
+
+      if (isGroup) {
+        if (target.isGroup !== true) updates.isGroup = true;
+        if (ctx.chat.title && target.title !== ctx.chat.title) updates.title = ctx.chat.title;
+        if (ctx.chat.username && target.username !== ctx.chat.username) updates.username = ctx.chat.username;
+      } else if (ctx.from) {
+        if (ctx.from.username && target.username !== ctx.from.username) updates.username = ctx.from.username;
+        if (ctx.from.first_name && target.firstName !== ctx.from.first_name) updates.firstName = ctx.from.first_name;
+      }
+
+      if (Object.keys(updates).length > 0) db.updateUser(targetId, updates);
+
       const actionText = ctx.message?.text || ctx.callbackQuery?.data || 'action';
-      console.log(`[Railway Bot] 📩 Update from @${ctx.from.username || ctx.from.id} (${ctx.from.first_name || ''}): "${actionText}"`);
+      const fromName = ctx.from ? `@${ctx.from.username || ctx.from.id} (${ctx.from.first_name || ''})` : 'Unknown';
+      const chatLabel = isGroup ? `[Group: "${ctx.chat.title || ctx.chat.id}"]` : '[Private]';
+      console.log(`[Railway Bot] 📩 Update in ${chatLabel} from ${fromName}: "${actionText}"`);
     }
     await next();
   });
 
   // Shared handler for /start and Home / Main Menu navigation
   const handleStartOrHome = async (ctx) => {
-    userStates.delete(ctx.from.id);
+    userStates.delete(getConversationStateKey(ctx));
+    if (isGroupChat(ctx)) {
+      const group = db.getUser(ctx.chat.id);
+      const activeBillId = group.activeBillId || group.savedBills?.[0]?.billId;
+      const status = group.notifications?.enabled !== false ? 'فعال' : 'غیرفعال';
+      const billText = activeBillId
+        ? `<code>${toPersianDigits(activeBillId)}</code>`
+        : 'هنوز تنظیم نشده';
+      await ctx.reply(
+        `👥 <b>ربات خاموشی برق برای این گروه آماده است.</b>\n\n` +
+        `📄 شناسه قبض فعال: ${billText}\n` +
+        `🔔 هشدار روزانه: <b>${status}</b>\n\n` +
+        `مدیر گروه می‌تواند شناسه را با دستور زیر تنظیم کند:\n` +
+        `<code>/setbill 1234567890123 نام محل</code>`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
     const user = db.getUser(ctx.from.id);
     const hasBookmarks = user.savedBills && user.savedBills.length > 0;
     const welcome = formatWelcomeMessage(ctx.from.first_name, hasBookmarks);
@@ -97,6 +175,18 @@ export function registerBotHandlers(bot, notifierService = null) {
 
   // /help command
   bot.command('help', async (ctx) => {
+    if (isGroupChat(ctx)) {
+      await ctx.reply(
+        `📖 <b>راهنمای استفاده در گروه:</b>\n\n` +
+        `• <code>/setbill شناسه نام محل</code> — تنظیم قبض توسط مدیر گروه\n` +
+        `• <code>/check</code> — نمایش کل برنامه قبض گروه\n` +
+        `• <code>/today</code> و <code>/tomorrow</code> — برنامه امروز و فردا\n` +
+        `• <code>/groupinfo</code> — وضعیت قبض و اعلان گروه\n` +
+        `• <code>/notif on</code> یا <code>/notif off</code> — مدیریت اعلان توسط مدیر گروه`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
     const user = db.getUser(ctx.from.id);
     const helpText = `📖 <b>راهنمای استفاده از ربات خاموشی برق گلستان:</b>\n\n` +
       `1️⃣ <b>استعلام سریع:</b> شناسه قبض ۱۳ رقمی خود را مستقیم بفرستید.\n` +
@@ -115,23 +205,62 @@ export function registerBotHandlers(bot, notifierService = null) {
     await handleNoticeQuery(ctx);
   });
 
-  // /bookmarks and /bills command
+  // Bot added to group or membership updates
+  bot.on('my_chat_member', async (ctx) => {
+    const status = ctx.myChatMember?.new_chat_member?.status;
+    if (status === 'member' || status === 'administrator') {
+      const group = db.getUser(ctx.chat.id);
+      group.isGroup = true;
+      if (ctx.chat.title) group.title = ctx.chat.title;
+      db.updateUser(ctx.chat.id, { isGroup: true, title: ctx.chat.title || '' });
+
+      const welcomeGroup = `سلام به همه اعضای محترم گروه <b>${escapeHtml(ctx.chat.title || '')}</b>! 👋⚡️\n\n` +
+        `ربات هوشمند <b>اطلاع‌رسانی خاموشی برق گلستان</b> به گروه شما افزوده شد.\n\n` +
+        `⚙️ <b>راهنمای مدیران گروه:</b>\n` +
+        `برای فعال‌سازی هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) برای این گروه، کافیست شناسه قبض محل را با دستور زیر ثبت فرمایید:\n` +
+        `<code>/setbill 1234567890123 نام ساختمان یا محل</code>\n\n` +
+        `📋 <b>دستورات قابل استفاده در گروه:</b>\n` +
+        `• <code>/check</code> : استعلام برنامه خاموشی قبض ثبت‌شده گروه\n` +
+        `• <code>/today</code> : استعلام وضعیت خاموشی امروز\n` +
+        `• <code>/tomorrow</code> : استعلام وضعیت خاموشی فردا\n` +
+        `• <code>/groupinfo</code> : مشاهده شناسه و وضعیت هشدار گروه\n` +
+        `• <code>/notif on</code> یا <code>/notif off</code> : فعال/غیرفعال‌سازی هشدار روزانه گروه`;
+
+      await ctx.reply(welcomeGroup, { parse_mode: 'HTML' }).catch(() => {});
+    } else if (status === 'left' || status === 'kicked') {
+      db.updateUser(ctx.chat.id, { isGroup: true });
+      db.setNotifications(ctx.chat.id, false);
+    }
+  });
+
   bot.command(['bookmarks', 'bills', 'saved'], async (ctx) => {
     await handleSavedBillsQuery(ctx);
   });
 
-  // /bookmark, /add, /save command: /bookmark <billId> [label]
-  bot.command(['bookmark', 'save', 'add'], async (ctx) => {
+  // /setbill, /setgroupbill, /addbill: Sets/adds bill ID for current chat (Group or Private)
+  bot.command(['setbill', 'setgroupbill', 'addbill'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    if (isGroup) {
+      const hasPerm = await isGroupAdmin(ctx);
+      if (!hasPerm) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به تنظیم شناسه قبض این گروه هستند.');
+        return;
+      }
+    }
+
     const text = ctx.message.text.trim();
     const parts = text.split(/\s+/).slice(1);
     if (parts.length === 0) {
-      userStates.set(ctx.from.id, { step: 'awaiting_bill_id' });
-      await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال کنید:');
+      const hint = isGroup
+        ? 'لطفاً شناسه قبض ۱۳ رقمی را همراه با دستور ارسال فرمایید. مثال:\n<code>/setbill 1234567890123 ساختمان یا محل</code>'
+        : 'لطفاً شناسه قبض ۱۳ رقمی را همراه با دستور ارسال فرمایید. مثال:\n<code>/setbill 1234567890123 خونه</code>';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
       return;
     }
 
     const rawBillId = parts[0];
-    const label = parts.slice(1).join(' ') || '';
+    const defaultLabel = isGroup ? (ctx.chat.title || 'قبض گروه') : 'قبض من';
+    const label = parts.slice(1).join(' ') || defaultLabel;
     const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
 
     if (billId.length < 8 || billId.length > 15) {
@@ -139,25 +268,198 @@ export function registerBotHandlers(bot, notifierService = null) {
       return;
     }
 
-    const res = db.addBillId(ctx.from.id, billId, label);
-    const user = db.getUser(ctx.from.id);
-    await ctx.reply(
-      `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${res.label}</b> به نشان‌شده‌ها اضافه شد و به کیبورد شما افزوده شد!`,
-      { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) }
-    );
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const res = db.addBillId(targetId, billId, label);
+    const target = db.getUser(targetId);
+    if (isGroup) {
+      target.isGroup = true;
+      if (ctx.chat.title) target.title = ctx.chat.title;
+      target.notifications.enabled = true;
+      db.updateUser(targetId, { isGroup: true, title: ctx.chat.title || '' });
+    }
+
+    const successMsg = isGroup
+      ? `✅ شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> برای گروه <b>${escapeHtml(ctx.chat.title || '')}</b> با موفقیت ثبت شد!\n\n🔔 <b>هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) برای این گروه فعال است.</b>`
+      : `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> ذخیره شد!`;
+
+    await ctx.reply(successMsg, {
+      parse_mode: 'HTML',
+      reply_markup: getPrivateReplyKeyboard(ctx, target.savedBills)
+    });
+
     await handleScheduleQuery(ctx, billId, 'all');
   });
 
-  // /check command: /check <billId>
-  bot.command('check', async (ctx) => {
+  // /bookmark, /save, /add command: /bookmark <billId> [label]
+  bot.command(['bookmark', 'save', 'add'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    if (isGroup) {
+      const hasPerm = await isGroupAdmin(ctx);
+      if (!hasPerm) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به افزودن شناسه قبض برای گروه هستند.');
+        return;
+      }
+    }
+
     const text = ctx.message.text.trim();
     const parts = text.split(/\s+/).slice(1);
     if (parts.length === 0) {
-      await ctx.reply('لطفاً شناسه قبض را به همراه دستور ارسال کنید. مثال:\n<code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+      if (isGroup) {
+        await ctx.reply('لطفاً شناسه قبض را همراه دستور ارسال کنید:\n<code>/bookmark 1234567890123 نام محل</code>', { parse_mode: 'HTML' });
+        return;
+      }
+      userStates.set(getConversationStateKey(ctx), { step: 'awaiting_bill_id' });
+      await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال کنید:');
       return;
     }
-    const billId = toEnglishDigits(parts[0]).replace(/\D/g, '');
+
+    const rawBillId = parts[0];
+    const defaultLabel = isGroup ? (ctx.chat.title || 'قبض گروه') : '';
+    const label = parts.slice(1).join(' ') || defaultLabel;
+    const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
+
+    if (billId.length < 8 || billId.length > 15) {
+      await ctx.reply('❌ شناسه قبض باید بین ۸ تا ۱۵ رقم باشد.');
+      return;
+    }
+
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const res = db.addBillId(targetId, billId, label);
+    const target = db.getUser(targetId);
+    if (isGroup) {
+      target.isGroup = true;
+      if (ctx.chat.title) target.title = ctx.chat.title;
+      db.updateUser(targetId, { isGroup: true, title: ctx.chat.title || '' });
+    }
+
+    const msg = isGroup
+      ? `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> برای گروه ذخیره شد!`
+      : `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> به نشان‌شده‌ها اضافه شد!`;
+
+    await ctx.reply(msg, { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, target.savedBills) });
     await handleScheduleQuery(ctx, billId, 'all');
+  });
+
+  // /check command: /check [billId]
+  bot.command('check', async (ctx) => {
+    const text = ctx.message.text.trim();
+    const parts = text.split(/\s+/).slice(1);
+    const isGroup = isGroupChat(ctx);
+    const targetId = getChatTargetId(ctx);
+    const target = db.getUser(targetId);
+
+    if (parts.length > 0) {
+      const billId = toEnglishDigits(parts[0]).replace(/\D/g, '');
+      await handleScheduleQuery(ctx, billId, 'all');
+      return;
+    }
+
+    // No billId passed in command
+    const activeBillId = target.activeBillId || target.savedBills?.[0]?.billId;
+    if (activeBillId) {
+      await handleScheduleQuery(ctx, activeBillId, 'all');
+      return;
+    }
+
+    if (isGroup) {
+      await ctx.reply(
+        '❌ هنوز شناسه قبضی برای این گروه ثبت نشده است!\n' +
+        'مدیر گروه می‌تواند با دستور زیر شناسه قبض را ثبت کند:\n' +
+        '<code>/setbill 1234567890123 نام ساختمان یا محل</code>',
+        { parse_mode: 'HTML' }
+      );
+    } else {
+      await ctx.reply('لطفاً شناسه قبض را ارسال کنید یا بنویسید:\n<code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+    }
+  });
+
+  // /today command
+  bot.command(['today', 'emrooz'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    const targetId = getChatTargetId(ctx);
+    const target = db.getUser(targetId);
+    const text = ctx.message.text.trim();
+    const parts = text.split(/\s+/).slice(1);
+    const billId = parts.length > 0
+      ? toEnglishDigits(parts[0]).replace(/\D/g, '')
+      : (target.activeBillId || target.savedBills?.[0]?.billId);
+
+    if (!billId) {
+      const hint = isGroup
+        ? '❌ شناسه قبضی برای این گروه ثبت نشده است. لطفاً شناسه را با دستور <code>/setbill 1234567890123</code> ثبت فرمایید.'
+        : '❌ شناسه قبضی ثبت نشده است. لطفاً شناسه قبض خود را ارسال فرمایید.';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
+      return;
+    }
+    await handleScheduleQuery(ctx, billId, 'today');
+  });
+
+  // /tomorrow command
+  bot.command(['tomorrow', 'farda'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    const targetId = getChatTargetId(ctx);
+    const target = db.getUser(targetId);
+    const text = ctx.message.text.trim();
+    const parts = text.split(/\s+/).slice(1);
+    const billId = parts.length > 0
+      ? toEnglishDigits(parts[0]).replace(/\D/g, '')
+      : (target.activeBillId || target.savedBills?.[0]?.billId);
+
+    if (!billId) {
+      const hint = isGroup
+        ? '❌ شناسه قبضی برای این گروه ثبت نشده است. لطفاً شناسه را با دستور <code>/setbill 1234567890123</code> ثبت فرمایید.'
+        : '❌ شناسه قبضی ثبت نشده است. لطفاً شناسه قبض خود را ارسال فرمایید.';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
+      return;
+    }
+    await handleScheduleQuery(ctx, billId, 'tomorrow');
+  });
+
+  // /groupinfo, /status, /info command
+  bot.command(['groupinfo', 'status', 'info'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    const targetId = getChatTargetId(ctx);
+    const target = db.getUser(targetId);
+
+    const title = isGroup ? `👥 <b>اطلاعات ربات در گروه ${escapeHtml(ctx.chat.title || '')}:</b>\n\n` : `👤 <b>اطلاعات حساب کاربری شما:</b>\n\n`;
+    const bills = target.savedBills || [];
+    const notifStatus = target.notifications?.enabled !== false ? '🟢 فعال (ساعت ۸:۰۰ صبح)' : '🔴 غیرفعال';
+
+    let body = `${title}🔔 <b>وضعیت هشدار خودکار روزانه:</b> ${notifStatus}\n`;
+    if (bills.length === 0) {
+      body += `📄 <b>شناسه قبض ثبت‌شده:</b> ثبت نشده است!\n\n` +
+        `<i>💡 برای ثبت شناسه: <code>/setbill 1234567890123 نام محل</code></i>`;
+    } else {
+      body += `📄 <b>شناسه‌های ثبت‌شده (${toPersianDigits(bills.length)} مورد):</b>\n`;
+      bills.forEach((b, i) => {
+        body += `${toPersianDigits(i + 1)}. <b>${escapeHtml(b.label)}</b>: <code>${toPersianDigits(b.billId)}</code>\n`;
+      });
+      body += `\n<i>💡 برای استعلام: <code>/check</code> یا <code>/today</code></i>`;
+    }
+
+    await ctx.reply(body, { parse_mode: 'HTML' });
+  });
+
+  // /notif command for quick toggle in group / private
+  bot.command(['notif', 'notification', 'alerts'], async (ctx) => {
+    const isGroup = isGroupChat(ctx);
+    if (isGroup) {
+      const hasPerm = await isGroupAdmin(ctx);
+      if (!hasPerm) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به تغییر تنظیمات هشدار این گروه هستند.');
+        return;
+      }
+    }
+
+    const targetId = getChatTargetId(ctx);
+    const target = db.getUser(targetId);
+    const requestedState = parseNotificationSetting(ctx.message.text);
+    const nextState = requestedState ?? !(target.notifications?.enabled !== false);
+    db.setNotifications(targetId, nextState);
+    const msg = nextState
+      ? '✅ هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) فعال شد.'
+      : '🔕 هشدار خودکار روزانه غیرفعال شد.';
+    await ctx.reply(msg);
   });
 
   // ================= ADMIN COMMANDS =================
@@ -174,12 +476,12 @@ export function registerBotHandlers(bot, notifierService = null) {
       return;
     }
 
-    const statusMsg = await ctx.reply('⏳ در حال بررسی و تست ارسال اعلانات روزانه...');
+    const statusMsg = await ctx.reply('⏳ در حال بررسی و تست ارسال اعلانات روزانه به کاربران و گروه‌ها...');
     const result = await notifierService.checkAndNotifyAll(true);
 
     const report = `🔔 <b>گزارش اجرای تست اعلان خاموشی:</b>\n\n` +
       `📅 <b>تاریخ:</b> ${toPersianDigits(result.dateJalali)}\n` +
-      `👥 <b>کاربران بررسی‌شده:</b> <code>${toPersianDigits(result.totalChecked)}</code>\n` +
+      `👥 <b>تارگت‌های بررسی‌شده (کاربران و گروه‌ها):</b> <code>${toPersianDigits(result.totalChecked)}</code>\n` +
       `📨 <b>پیام‌های ارسال‌شده:</b> <code>${toPersianDigits(result.totalNotified)}</code>\n` +
       `⚠️ <b>ناموفق / بدون قطعی:</b> <code>${toPersianDigits(result.totalFailed)}</code>`;
 
@@ -200,23 +502,27 @@ export function registerBotHandlers(bot, notifierService = null) {
     const stats = db.getStats();
     const allUsers = db.getAllUsers();
 
-    let text = `📊 <b>آمار و گزارش کاربران ربات:</b>\n\n` +
-      `👥 <b>تعداد کل کاربران:</b> <code>${toPersianDigits(stats.totalUsers)}</code>\n` +
+    let text = `📊 <b>آمار و گزارش سیستم:</b>\n\n` +
+      `👤 <b>کاربران شخصی:</b> <code>${toPersianDigits(stats.totalUsers)}</code>\n` +
+      `👥 <b>گروه‌ها:</b> <code>${toPersianDigits(stats.totalGroups)}</code>\n` +
       `🔖 <b>تعداد کل نشان‌ها:</b> <code>${toPersianDigits(stats.totalSavedBills)}</code>\n` +
       `🔔 <b>کاربران با هشدار فعال:</b> <code>${toPersianDigits(stats.subscribedUsers)}</code>\n` +
+      `🔔 <b>گروه‌های با هشدار فعال:</b> <code>${toPersianDigits(stats.subscribedGroups)}</code>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📋 <b>لیست کاربران استارت‌زده:</b>\n\n`;
+      `📋 <b>آخرین کاربران و گروه‌ها:</b>\n\n`;
 
     allUsers.slice(0, 30).forEach((u, idx) => {
-      const name = u.firstName || 'بی‌نام';
+      const isGrp = u.isGroup || String(u.userId).startsWith('-');
+      const typeBadge = isGrp ? '👥 [گروه]' : '👤';
+      const name = isGrp ? (u.title || 'گروه بی‌نام') : (u.firstName || 'بی‌نام');
       const username = u.username ? `@${u.username}` : 'ندارد';
       const billsCount = u.savedBills ? u.savedBills.length : 0;
-      const notifStatus = u.notifications?.enabled ? '🔔' : '🔕';
+      const notifStatus = u.notifications?.enabled !== false ? '🔔' : '🔕';
       const joinDate = u.createdAt ? parseDateInfo(u.createdAt).jalaliStr : '-';
 
-      text += `${toPersianDigits(idx + 1)}. <b>${name}</b> (${username})\n` +
+      text += `${toPersianDigits(idx + 1)}. ${typeBadge} <b>${name}</b> (${username})\n` +
         `   🆔 <code>${u.userId}</code> | 🔖 ${toPersianDigits(billsCount)} نشان | ${notifStatus}\n` +
-        `   📅 عضویت: ${toPersianDigits(joinDate)}\n\n`;
+        `   📅 ثبت: ${toPersianDigits(joinDate)}\n\n`;
     });
 
     if (allUsers.length > 30) {
@@ -307,7 +613,7 @@ export function registerBotHandlers(bot, notifierService = null) {
 
   // Handle Main Menu Button Texts
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
-    const user = db.getUser(ctx.from.id);
+    const user = db.getUser(getChatTargetId(ctx));
     const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
     if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
@@ -317,7 +623,7 @@ export function registerBotHandlers(bot, notifierService = null) {
   });
 
   bot.hears('🗓 خاموشی فردا', async (ctx) => {
-    const user = db.getUser(ctx.from.id);
+    const user = db.getUser(getChatTargetId(ctx));
     const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
     if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
@@ -327,7 +633,7 @@ export function registerBotHandlers(bot, notifierService = null) {
   });
 
   bot.hears('📋 کل برنامه هفتگی', async (ctx) => {
-    const user = db.getUser(ctx.from.id);
+    const user = db.getUser(getChatTargetId(ctx));
     const activeBillId = user.activeBillId || user.savedBills?.[0]?.billId;
     if (!activeBillId) {
       await ctx.reply('❌ شما هنوز شناسه قبضی ثبت نکرده‌اید!\nلطفاً شناسه قبض ۱۳ رقمی خود را ارسال کنید.');
@@ -354,7 +660,7 @@ export function registerBotHandlers(bot, notifierService = null) {
   });
 
   bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید', 'افزودن نشان جدید', 'افزودن شناسه جدید'], async (ctx) => {
-    userStates.set(ctx.from.id, { step: 'awaiting_bill_id' });
+    userStates.set(getConversationStateKey(ctx), { step: 'awaiting_bill_id' });
     await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
   });
 
@@ -367,7 +673,7 @@ export function registerBotHandlers(bot, notifierService = null) {
   });
 
   bot.hears(['ℹ️ راهنما', 'راهنما'], async (ctx) => {
-    const user = db.getUser(ctx.from.id);
+    const user = db.getUser(getChatTargetId(ctx));
     const helpText = `📖 <b>راهنمای ربات:</b>\n\n` +
       `⚡️ این ربات اطلاعات خاموشی را مستقیماً از سامانه رسمی شرکت توزیع نیروی برق استان گلستان (goped.ir) دریافت می‌کند.\n\n` +
       `• برای استعلام، کافیست شناسه قبض خود را بنویسید و بفرستید.\n` +
@@ -379,9 +685,10 @@ export function registerBotHandlers(bot, notifierService = null) {
   // Handle Freeform Text (Bill IDs, Bookmark button clicks, States, etc.)
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
-    const userId = ctx.from.id;
-    const user = db.getUser(userId);
-    const state = userStates.get(userId);
+    const targetId = getChatTargetId(ctx);
+    const stateKey = getConversationStateKey(ctx);
+    const user = db.getUser(targetId);
+    const state = userStates.get(stateKey);
 
     // If user clicked on a dynamic bookmark button (e.g. "🔖 خونه" or "🔖 مغازه")
     if (user.savedBills && user.savedBills.length > 0) {
@@ -396,7 +703,7 @@ export function registerBotHandlers(bot, notifierService = null) {
                b.billId === toEnglishDigits(cleanText);
       });
       if (matchedBookmark) {
-        db.setActiveBillId(userId, matchedBookmark.billId);
+        db.setActiveBillId(targetId, matchedBookmark.billId);
         await handleScheduleQuery(ctx, matchedBookmark.billId, 'all');
         return;
       }
@@ -410,7 +717,7 @@ export function registerBotHandlers(bot, notifierService = null) {
           await ctx.reply('❌ شناسه قبض نامعتبر است. لطفاً شناسه قبض معتبر ارسال کنید:');
           return;
         }
-        userStates.set(userId, { step: 'awaiting_label', billId });
+        userStates.set(stateKey, { step: 'awaiting_label', billId });
         await ctx.reply(`برای شناسه <code>${toPersianDigits(billId)}</code> یک عنوان برای نشان بنویسید (مثلاً: 🏠 خانه):`, {
           parse_mode: 'HTML'
         });
@@ -420,9 +727,9 @@ export function registerBotHandlers(bot, notifierService = null) {
       if (state.step === 'awaiting_label') {
         const billId = state.billId;
         const label = text;
-        userStates.delete(userId);
-        db.addBillId(userId, billId, label);
-        const updatedUser = db.getUser(userId);
+        userStates.delete(stateKey);
+        db.addBillId(targetId, billId, label);
+        const updatedUser = db.getUser(targetId);
         await ctx.reply(
           `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> با موفقیت نشان (Bookmark) شد و روی کیبورد شما قرار گرفت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
@@ -435,9 +742,9 @@ export function registerBotHandlers(bot, notifierService = null) {
       if (state.step === 'awaiting_custom_save_label') {
         const billId = state.billId;
         const label = text;
-        userStates.delete(userId);
-        db.addBillId(userId, billId, label);
-        const updatedUser = db.getUser(userId);
+        userStates.delete(stateKey);
+        db.addBillId(targetId, billId, label);
+        const updatedUser = db.getUser(targetId);
         await ctx.reply(
           `🔖 شناسه <code>${toPersianDigits(billId)}</code> با عنوان <b>${label}</b> نشان شد!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
@@ -450,9 +757,9 @@ export function registerBotHandlers(bot, notifierService = null) {
       if (state.step === 'awaiting_rename') {
         const billId = state.billId;
         const newLabel = text;
-        userStates.delete(userId);
-        db.renameBillId(userId, billId, newLabel);
-        const updatedUser = db.getUser(userId);
+        userStates.delete(stateKey);
+        db.renameBillId(targetId, billId, newLabel);
+        const updatedUser = db.getUser(targetId);
         await ctx.reply(
           `✏️ نام نشان با موفقیت به <b>${newLabel}</b> تغییر یافت!`,
           { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, updatedUser.savedBills) }
@@ -479,7 +786,22 @@ export function registerBotHandlers(bot, notifierService = null) {
   // Handle Callback Queries (Inline Button Clicks)
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
-    const userId = ctx.from.id;
+    const targetId = getChatTargetId(ctx);
+    const stateKey = getConversationStateKey(ctx);
+
+    const modifiesSavedGroupData = isGroupChat(ctx) && (
+      data.startsWith('save_prompt:') ||
+      data.startsWith('rename_prompt:') ||
+      data.startsWith('delete_bill_do:') ||
+      data === 'rename_bill_menu' ||
+      data === 'delete_bill_menu' ||
+      data === 'add_bill_prompt' ||
+      data.startsWith('toggle_notifications:')
+    );
+    if (modifiesSavedGroupData && !(await isGroupAdmin(ctx))) {
+      await ctx.answerCallbackQuery({ text: 'فقط مدیران گروه اجازه تغییر تنظیمات را دارند.', show_alert: true }).catch(() => {});
+      return;
+    }
 
     // Refresh schedule query: sched_refresh:<mode>:<billId>
     if (data.startsWith('sched_refresh:')) {
@@ -504,8 +826,8 @@ export function registerBotHandlers(bot, notifierService = null) {
     // Select active bill: select_bill:<billId>
     if (data.startsWith('select_bill:')) {
       const billId = data.replace('select_bill:', '');
-      db.setActiveBillId(userId, billId);
-      const user = db.getUser(userId);
+      db.setActiveBillId(targetId, billId);
+      const user = db.getUser(targetId);
       const active = user.savedBills.find(b => b.billId === billId);
       const label = active ? active.label : billId;
       await ctx.reply(`⭐️ نشان <b>${label}</b> انتخاب شد:`, {
@@ -519,7 +841,7 @@ export function registerBotHandlers(bot, notifierService = null) {
     // Save prompt for queried bill: save_prompt:<billId>
     if (data.startsWith('save_prompt:')) {
       const billId = data.replace('save_prompt:', '');
-      userStates.set(userId, { step: 'awaiting_custom_save_label', billId });
+      userStates.set(stateKey, { step: 'awaiting_custom_save_label', billId });
       await ctx.reply(`🏷 برای نشان کردن شناسه <code>${toPersianDigits(billId)}</code> یک نام دلخواه بفرستید (مثلاً: 🏠 خانه یا 🏢 محل کار):`, {
         parse_mode: 'HTML'
       });
@@ -529,14 +851,14 @@ export function registerBotHandlers(bot, notifierService = null) {
     // Rename bookmark prompt: rename_prompt:<billId>
     if (data.startsWith('rename_prompt:')) {
       const billId = data.replace('rename_prompt:', '');
-      userStates.set(userId, { step: 'awaiting_rename', billId });
+      userStates.set(stateKey, { step: 'awaiting_rename', billId });
       await ctx.reply(`✏️ لطفاً نام جدید را برای این نشان وارد نمایید:`);
       return;
     }
 
     // Rename bookmarks list menu
     if (data === 'rename_bill_menu') {
-      const user = db.getUser(userId);
+      const user = db.getUser(targetId);
       if (user.savedBills.length === 0) {
         await ctx.reply('نشانی برای تغییر نام وجود ندارد.');
         return;
@@ -553,7 +875,7 @@ export function registerBotHandlers(bot, notifierService = null) {
 
     // Add bill prompt
     if (data === 'add_bill_prompt') {
-      userStates.set(userId, { step: 'awaiting_bill_id' });
+      userStates.set(stateKey, { step: 'awaiting_bill_id' });
       await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
       return;
     }
@@ -566,7 +888,7 @@ export function registerBotHandlers(bot, notifierService = null) {
 
     // Delete bill menu
     if (data === 'delete_bill_menu') {
-      const user = db.getUser(userId);
+      const user = db.getUser(targetId);
       if (user.savedBills.length === 0) {
         await ctx.reply('نشانی برای حذف وجود ندارد.');
         return;
@@ -584,8 +906,8 @@ export function registerBotHandlers(bot, notifierService = null) {
     // Execute delete bill: delete_bill_do:<billId>
     if (data.startsWith('delete_bill_do:')) {
       const billId = data.replace('delete_bill_do:', '');
-      db.removeBillId(userId, billId);
-      const user = db.getUser(userId);
+      db.removeBillId(targetId, billId);
+      const user = db.getUser(targetId);
       await ctx.reply(`🗑 شناسه قبض <code>${toPersianDigits(billId)}</code> از نشان‌شده‌ها حذف شد.`, {
         parse_mode: 'HTML',
         reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
@@ -597,8 +919,8 @@ export function registerBotHandlers(bot, notifierService = null) {
     // Toggle notification preferences: toggle_notifications:<val>
     if (data.startsWith('toggle_notifications:')) {
       const enabled = data.split(':')[1] === '1';
-      db.setNotifications(userId, enabled);
-      const user = db.getUser(userId);
+      db.setNotifications(targetId, enabled);
+      const user = db.getUser(targetId);
       const statusText = enabled ? '✅ اطلاع‌رسانی خودکار روزانه فعال شد.' : '🔕 اطلاع‌رسانی خودکار غیرفعال شد.';
       await ctx.reply(statusText, { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
       return;
@@ -622,7 +944,7 @@ async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false,
     return;
   }
 
-  const user = db.getUser(ctx.from.id);
+  const user = db.getUser(getChatTargetId(ctx));
   const savedItem = user.savedBills.find(b => b.billId === billId);
   const customLabel = savedItem ? savedItem.label : '';
   const isBookmarked = Boolean(savedItem);
@@ -637,7 +959,7 @@ async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false,
   try {
     const result = await gopedApi.getSchedule(billId, forceFresh);
     const text = formatScheduleMessage(result, mode, customLabel);
-    const replyMarkup = getScheduleInlineKeyboard(billId, mode, isBookmarked);
+    const replyMarkup = getScheduleInlineKeyboard(billId, mode, isBookmarked, !isGroupChat(ctx));
 
     if (isEdit && ctx.callbackQuery?.message) {
       try {
@@ -675,7 +997,7 @@ async function handleScheduleQuery(ctx, rawBillId, mode = 'all', isEdit = false,
  * Handles official notice lookup.
  */
 async function handleNoticeQuery(ctx) {
-  const user = db.getUser(ctx.from.id);
+  const user = db.getUser(getChatTargetId(ctx));
   const loading = await ctx.reply('⏳ در حال دریافت آخرین اطلاعیه...').catch(() => null);
   try {
     const notice = await gopedApi.getNotice();
@@ -692,9 +1014,9 @@ async function handleNoticeQuery(ctx) {
  * Handles viewing saved bill list and management buttons.
  */
 async function handleSavedBillsQuery(ctx, isEdit = false) {
-  const user = db.getUser(ctx.from.id);
+  const user = db.getUser(getChatTargetId(ctx));
   const text = formatSavedBillsList(user.savedBills, user.activeBillId);
-  const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+  const kb = isGroupChat(ctx) ? undefined : getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
 
   if (isEdit && ctx.callbackQuery?.message) {
     await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }).catch(async () => {
@@ -709,7 +1031,7 @@ async function handleSavedBillsQuery(ctx, isEdit = false) {
  * Handles notification toggle menu.
  */
 async function handleNotificationSettings(ctx) {
-  const user = db.getUser(ctx.from.id);
+  const user = db.getUser(getChatTargetId(ctx));
   const isEnabled = user.notifications?.enabled !== false;
   const statusStr = isEnabled ? '🟢 فعال' : '🔴 غیرفعال';
   const text = `🔔 <b>تنظیمات هشدار خودکار روزانه:</b>\n\n` +
@@ -721,4 +1043,3 @@ async function handleNotificationSettings(ctx) {
     reply_markup: getNotificationSettingsKeyboard(isEnabled)
   });
 }
-

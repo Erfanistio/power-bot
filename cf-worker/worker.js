@@ -292,6 +292,7 @@ class CloudflareStorage {
 
   async getUser(userId) {
     const id = String(userId);
+    const isGroup = id.startsWith('-');
     let user = memUserCache.get(id);
     if (!user && this.kv) {
       try {
@@ -306,6 +307,8 @@ class CloudflareStorage {
         userId: id,
         username: '',
         firstName: '',
+        title: '',
+        isGroup,
         savedBills: [],
         activeBillId: null,
         notifications: {
@@ -321,6 +324,10 @@ class CloudflareStorage {
       if (!Array.isArray(user.savedBills)) {
         user.savedBills = [];
       }
+      if (!user.notifications) {
+        user.notifications = { enabled: true, time: '08:00', lastNotifiedDate: null };
+      }
+      if (typeof user.isGroup !== 'boolean') user.isGroup = isGroup;
       if (!user.activeBillId && user.savedBills.length > 0) {
         user.activeBillId = user.savedBills[0].billId;
         await this.saveUser(user);
@@ -359,16 +366,30 @@ class CloudflareStorage {
 
   async getStats() {
     const users = await this.getAllUsers();
+    let totalUsers = 0;
+    let totalGroups = 0;
     let totalSavedBills = 0;
     let subscribedUsers = 0;
+    let subscribedGroups = 0;
     users.forEach(u => {
+      const isGroup = u.isGroup || String(u.userId).startsWith('-');
+      if (isGroup) {
+        totalGroups++;
+        if (u.notifications?.enabled && u.savedBills?.length > 0) subscribedGroups++;
+      } else {
+        totalUsers++;
+        if (u.notifications?.enabled && u.savedBills?.length > 0) subscribedUsers++;
+      }
       if (u.savedBills) totalSavedBills += u.savedBills.length;
-      if (u.notifications?.enabled) subscribedUsers++;
     });
     return {
-      totalUsers: users.length,
+      totalUsers,
+      totalGroups,
+      totalTargets: users.length,
       totalSavedBills,
-      subscribedUsers
+      subscribedUsers,
+      subscribedGroups,
+      subscribedTargets: subscribedUsers + subscribedGroups
     };
   }
 
@@ -506,18 +527,52 @@ function getPrivateReplyKeyboard(ctx, savedBills = []) {
   return getMainReplyKeyboard(savedBills);
 }
 
-function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = false) {
+function isGroupChat(ctx) {
+  return ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+}
+
+function getChatTargetId(ctx) {
+  return isGroupChat(ctx) ? ctx.chat.id : ctx.from.id;
+}
+
+async function isGroupAdmin(env, ctx) {
+  if (!isGroupChat(ctx)) return true;
+  if (ctx.senderChat?.id === ctx.chat.id) return true;
+  if (!ctx.from) return false;
+  if (isUserAdmin(env, ctx.from.id)) return true;
+  const member = await ctx.getChatMember(ctx.from.id).catch(() => null);
+  return Boolean(member && (member.status === 'creator' || member.status === 'administrator'));
+}
+
+function parseNotificationSetting(text = '') {
+  const args = String(text).trim().toLowerCase().split(/\s+/).slice(1);
+  if (args.join(' ').includes('غیر فعال')) return false;
+  if (args.some(arg => ['off', 'disable', '0', 'خاموش', 'غیرفعال'].includes(arg))) return false;
+  if (args.some(arg => ['on', 'enable', '1', 'روشن', 'فعال'].includes(arg))) return true;
+  return null;
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = false, canManage = true) {
   const kb = new InlineKeyboard();
   if (currentMode !== 'today') kb.text('⚡️ امروز', `sched:today:${billId}`);
   if (currentMode !== 'tomorrow') kb.text('🗓 فردا', `sched:tom:${billId}`);
   if (currentMode !== 'all') kb.text('📋 کل جدول', `sched:all:${billId}`);
   kb.row().text('🔄 بروزرسانی', `sched_refresh:${currentMode}:${billId}`);
 
-  if (!isBookmarked) {
-    kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
-  } else {
-    kb.text('✏️ تغییر نام', `rename_prompt:${billId}`);
-    kb.text('🗑 حذف نشان', `delete_bill_do:${billId}`);
+  if (canManage) {
+    if (!isBookmarked) {
+      kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
+    } else {
+      kb.text('✏️ تغییر نام', `rename_prompt:${billId}`);
+      kb.text('🗑 حذف نشان', `delete_bill_do:${billId}`);
+    }
   }
   return kb;
 }
@@ -610,10 +665,10 @@ function formatScheduleMessage(data, mode = 'all', customLabel = '') {
     header += `⚠️ <i>توجه: به دلیل کندی لحظه‌ای در سرور توزیع برق، آخرین اطلاعات دریافت شده نمایش داده می‌شود.</i>\n\n`;
   }
   header += `⚡️ <b>برنامه قطعی برق گلستان</b>\n`;
-  if (customLabel) header += `🏷 <b>عنوان:</b> ${customLabel}\n`;
+  if (customLabel) header += `🏷 <b>عنوان:</b> ${escapeHtml(customLabel)}\n`;
   if (customer.BillId) header += `📄 <b>شناسه قبض:</b> <code>${toPersianDigits(customer.BillId)}</code>\n`;
-  if (customer.Name) header += `👤 <b>مشترک:</b> ${customer.Name}\n`;
-  if (customer.DistributionTitle) header += `📍 <b>منطقه / امور:</b> ${customer.DistributionTitle}\n`;
+  if (customer.Name) header += `👤 <b>مشترک:</b> ${escapeHtml(customer.Name)}\n`;
+  if (customer.DistributionTitle) header += `📍 <b>منطقه / امور:</b> ${escapeHtml(customer.DistributionTitle)}\n`;
   header += `━━━━━━━━━━━━━━━━━━━━\n`;
 
   const matchesDate = (bDate, targetG, targetJ) => {
@@ -678,7 +733,7 @@ function formatSavedBillsList(savedBills = [], activeBillId = null) {
   let text = `🔖 <b>قبض‌های نشان‌شده شما (Bookmarks):</b>\n\n`;
   savedBills.forEach((b, idx) => {
     const isActive = b.billId === activeBillId ? ' ⭐️ (فعال)' : '';
-    text += `${toPersianDigits(idx + 1)}. <b>${b.label}</b>${isActive}\n   📄 شناسه: <code>${toPersianDigits(b.billId)}</code>\n\n`;
+    text += `${toPersianDigits(idx + 1)}. <b>${escapeHtml(b.label)}</b>${isActive}\n   📄 شناسه: <code>${toPersianDigits(b.billId)}</code>\n\n`;
   });
   text += `👇 برای مشاهده آنی برنامه یا مدیریت، روی دکمه‌های زیر بزنید:`;
   return text;
@@ -687,7 +742,8 @@ function formatSavedBillsList(savedBills = [], activeBillId = null) {
 // ================= WORKER BOT CORE =================
 
 function createBot(env, executionCtx = null) {
-  const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
+  const token = env.BOT_TOKEN;
+  if (!token) throw new Error('BOT_TOKEN is not configured');
   const bot = new Bot(token, {
     botInfo: {
       id: 8931573991,
@@ -706,25 +762,39 @@ function createBot(env, executionCtx = null) {
     console.error('[Bot Catch Error]:', err.error || err);
   });
 
-  // User profile tracking
+  // User and group profile tracking
   bot.use(async (ctx, next) => {
-    if (ctx.from) {
-      const user = await storage.getUser(ctx.from.id);
+    if (ctx.chat) {
+      const target = await storage.getUser(getChatTargetId(ctx));
       let changed = false;
-      if (ctx.from.username && user.username !== ctx.from.username) {
-        user.username = ctx.from.username;
-        changed = true;
+      if (isGroupChat(ctx)) {
+        if (target.isGroup !== true) { target.isGroup = true; changed = true; }
+        if (ctx.chat.title && target.title !== ctx.chat.title) { target.title = ctx.chat.title; changed = true; }
+        if (ctx.chat.username && target.username !== ctx.chat.username) { target.username = ctx.chat.username; changed = true; }
+      } else if (ctx.from) {
+        if (ctx.from.username && target.username !== ctx.from.username) { target.username = ctx.from.username; changed = true; }
+        if (ctx.from.first_name && target.firstName !== ctx.from.first_name) { target.firstName = ctx.from.first_name; changed = true; }
       }
-      if (ctx.from.first_name && user.firstName !== ctx.from.first_name) {
-        user.firstName = ctx.from.first_name;
-        changed = true;
-      }
-      if (changed) await storage.saveUser(user);
+      if (changed) await storage.saveUser(target);
     }
     await next();
   });
 
   const handleStartOrHome = async (ctx) => {
+    if (isGroupChat(ctx)) {
+      const group = await storage.getUser(ctx.chat.id);
+      const activeBillId = group.activeBillId || group.savedBills?.[0]?.billId;
+      const status = group.notifications?.enabled !== false ? 'فعال' : 'غیرفعال';
+      await ctx.reply(
+        `👥 <b>ربات خاموشی برق برای این گروه آماده است.</b>\n\n` +
+        `📄 شناسه قبض فعال: ${activeBillId ? `<code>${toPersianDigits(activeBillId)}</code>` : 'هنوز تنظیم نشده'}\n` +
+        `🔔 هشدار روزانه: <b>${status}</b>\n\n` +
+        `مدیر گروه می‌تواند شناسه را با دستور زیر تنظیم کند:\n` +
+        `<code>/setbill 1234567890123 نام محل</code>`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
     await storage.setState(ctx.from.id, null);
     const user = await storage.getUser(ctx.from.id);
     const hasBookmarks = user.savedBills && user.savedBills.length > 0;
@@ -796,44 +866,247 @@ function createBot(env, executionCtx = null) {
     }
   });
 
+  // Bot added to group or member updates
+  bot.on('my_chat_member', async (ctx) => {
+    const status = ctx.myChatMember?.new_chat_member?.status;
+    if (status === 'member' || status === 'administrator') {
+      const group = await storage.getUser(ctx.chat.id);
+      group.isGroup = true;
+      if (ctx.chat.title) group.title = ctx.chat.title;
+      await storage.saveUser(group);
+
+      const welcomeGroup = `سلام به همه اعضای محترم گروه <b>${escapeHtml(ctx.chat.title || '')}</b>! 👋⚡️\n\n` +
+        `ربات هوشمند <b>اطلاع‌رسانی خاموشی برق گلستان</b> به گروه شما افزوده شد.\n\n` +
+        `⚙️ <b>راهنمای مدیران گروه:</b>\n` +
+        `برای فعال‌سازی هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) برای این گروه، کافیست شناسه قبض محل را با دستور زیر ثبت فرمایید:\n` +
+        `<code>/setbill 1234567890123 نام ساختمان یا محل</code>\n\n` +
+        `📋 <b>دستورات قابل استفاده در گروه:</b>\n` +
+        `• <code>/check</code> : استعلام برنامه خاموشی قبض ثبت‌شده گروه\n` +
+        `• <code>/today</code> : استعلام وضعیت خاموشی امروز\n` +
+        `• <code>/tomorrow</code> : استعلام وضعیت خاموشی فردا\n` +
+        `• <code>/groupinfo</code> : مشاهده شناسه و وضعیت هشدار گروه\n` +
+        `• <code>/notif on</code> یا <code>/notif off</code> : فعال/غیرفعال‌سازی هشدار روزانه گروه`;
+
+      await ctx.reply(welcomeGroup, { parse_mode: 'HTML' }).catch(() => {});
+    } else if (status === 'left' || status === 'kicked') {
+      const group = await storage.getUser(ctx.chat.id);
+      group.isGroup = true;
+      group.notifications.enabled = false;
+      await storage.saveUser(group);
+    }
+  });
+
+  // /setbill, /setgroupbill, /addbill
+  bot.command(['setbill', 'setgroupbill', 'addbill'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    if (isGroup) {
+      if (!(await isGroupAdmin(env, ctx))) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به تنظیم شناسه قبض این گروه هستند.');
+        return;
+      }
+    }
+
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    if (parts.length === 0) {
+      const hint = isGroup
+        ? 'لطفاً شناسه قبض ۱۳ رقمی را همراه با دستور ارسال فرمایید. مثال:\n<code>/setbill 1234567890123 ساختمان یا محل</code>'
+        : 'لطفاً شناسه قبض ۱۳ رقمی را همراه با دستور ارسال فرمایید. مثال:\n<code>/setbill 1234567890123 خونه</code>';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const rawBillId = parts[0];
+    const defaultLabel = isGroup ? (ctx.chat.title || 'قبض گروه') : 'قبض من';
+    const label = parts.slice(1).join(' ') || defaultLabel;
+    const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
+
+    if (billId.length < 8 || billId.length > 15) {
+      await ctx.reply('❌ شناسه قبض باید بین ۸ تا ۱۵ رقم باشد.');
+      return;
+    }
+
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const res = await storage.addBillId(targetId, billId, label);
+    const target = await storage.getUser(targetId);
+    if (isGroup) {
+      target.isGroup = true;
+      if (ctx.chat.title) target.title = ctx.chat.title;
+      target.notifications.enabled = true;
+      await storage.saveUser(target);
+    }
+
+    const successMsg = isGroup
+      ? `✅ شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> برای گروه <b>${escapeHtml(ctx.chat.title || '')}</b> با موفقیت ثبت شد!\n\n🔔 <b>هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) برای این گروه فعال است.</b>`
+      : `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> ذخیره شد!`;
+
+    await ctx.reply(successMsg, {
+      parse_mode: 'HTML',
+      reply_markup: getPrivateReplyKeyboard(ctx, target.savedBills)
+    });
+
+    await executeScheduleLookup(ctx, storage, billId, 'all');
+  });
+
   bot.command(['bookmarks', 'bills', 'saved'], async (ctx) => {
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const text = formatSavedBillsList(user.savedBills, user.activeBillId);
-    const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+    const kb = isGroupChat(ctx) ? undefined : getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   });
 
   bot.command(['bookmark', 'save', 'add'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    if (isGroup) {
+      if (!(await isGroupAdmin(env, ctx))) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به افزودن شناسه قبض برای گروه هستند.');
+        return;
+      }
+    }
+
     const parts = ctx.message.text.trim().split(/\s+/).slice(1);
     if (parts.length === 0) {
+      if (isGroup) {
+        await ctx.reply('لطفاً شناسه قبض را همراه دستور ارسال کنید:\n<code>/bookmark 1234567890123 نام محل</code>', { parse_mode: 'HTML' });
+        return;
+      }
       await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
       await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال کنید:');
       return;
     }
     const rawBillId = parts[0];
-    const label = parts.slice(1).join(' ') || '';
+    const defaultLabel = isGroup ? (ctx.chat.title || 'قبض گروه') : '';
+    const label = parts.slice(1).join(' ') || defaultLabel;
     const billId = toEnglishDigits(rawBillId).replace(/\D/g, '');
     if (billId.length < 8 || billId.length > 15) {
       await ctx.reply('❌ شناسه قبض باید بین ۸ تا ۱۵ رقم باشد.');
       return;
     }
-    const res = await storage.addBillId(ctx.from.id, billId, label);
-    const user = await storage.getUser(ctx.from.id);
-    await ctx.reply(
-      `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${res.label}</b> به نشان‌شده‌ها اضافه شد و به کیبورد شما افزوده شد!`,
-      { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) }
-    );
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const res = await storage.addBillId(targetId, billId, label);
+    const target = await storage.getUser(targetId);
+    if (isGroup) {
+      target.isGroup = true;
+      if (ctx.chat.title) target.title = ctx.chat.title;
+      await storage.saveUser(target);
+    }
+    const msg = isGroup
+      ? `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> برای گروه ذخیره شد!`
+      : `🔖 شناسه قبض <code>${toPersianDigits(billId)}</code> با عنوان <b>${escapeHtml(res.label)}</b> به نشان‌شده‌ها اضافه شد!`;
+
+    await ctx.reply(msg, { parse_mode: 'HTML', reply_markup: getPrivateReplyKeyboard(ctx, target.savedBills) });
     await executeScheduleLookup(ctx, storage, billId, 'all');
   });
 
   bot.command('check', async (ctx) => {
     const parts = ctx.message.text.trim().split(/\s+/).slice(1);
-    if (parts.length === 0) {
-      await ctx.reply('لطفاً شناسه قبض را به همراه دستور ارسال کنید: <code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const target = await storage.getUser(targetId);
+
+    if (parts.length > 0) {
+      const billId = toEnglishDigits(parts[0]).replace(/\D/g, '');
+      await executeScheduleLookup(ctx, storage, billId, 'all');
       return;
     }
-    const billId = toEnglishDigits(parts[0]).replace(/\D/g, '');
-    await executeScheduleLookup(ctx, storage, billId, 'all');
+
+    const activeBillId = target.activeBillId || target.savedBills?.[0]?.billId;
+    if (activeBillId) {
+      await executeScheduleLookup(ctx, storage, activeBillId, 'all');
+      return;
+    }
+
+    if (isGroup) {
+      await ctx.reply(
+        '❌ هنوز شناسه قبضی برای این گروه ثبت نشده است!\n' +
+        'مدیر گروه می‌تواند با دستور زیر شناسه قبض را ثبت کند:\n' +
+        '<code>/setbill 1234567890123 نام ساختمان یا محل</code>',
+        { parse_mode: 'HTML' }
+      );
+    } else {
+      await ctx.reply('لطفاً شناسه قبض را ارسال کنید یا بنویسید:\n<code>/check 1234567890123</code>', { parse_mode: 'HTML' });
+    }
+  });
+
+  bot.command(['today', 'emrooz'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const target = await storage.getUser(targetId);
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    const billId = parts.length > 0
+      ? toEnglishDigits(parts[0]).replace(/\D/g, '')
+      : (target.activeBillId || target.savedBills?.[0]?.billId);
+
+    if (!billId) {
+      const hint = isGroup
+        ? '❌ شناسه قبضی برای این گروه ثبت نشده است. لطفاً شناسه را با دستور <code>/setbill 1234567890123</code> ثبت فرمایید.'
+        : '❌ شناسه قبضی ثبت نشده است. لطفاً شناسه قبض خود را ارسال فرمایید.';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
+      return;
+    }
+    await executeScheduleLookup(ctx, storage, billId, 'today');
+  });
+
+  bot.command(['tomorrow', 'farda'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const target = await storage.getUser(targetId);
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    const billId = parts.length > 0
+      ? toEnglishDigits(parts[0]).replace(/\D/g, '')
+      : (target.activeBillId || target.savedBills?.[0]?.billId);
+
+    if (!billId) {
+      const hint = isGroup
+        ? '❌ شناسه قبضی برای این گروه ثبت نشده است. لطفاً شناسه را با دستور <code>/setbill 1234567890123</code> ثبت فرمایید.'
+        : '❌ شناسه قبضی ثبت نشده است. لطفاً شناسه قبض خود را ارسال فرمایید.';
+      await ctx.reply(hint, { parse_mode: 'HTML' });
+      return;
+    }
+    await executeScheduleLookup(ctx, storage, billId, 'tomorrow');
+  });
+
+  bot.command(['groupinfo', 'status', 'info'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const target = await storage.getUser(targetId);
+
+    const title = isGroup ? `👥 <b>اطلاعات ربات در گروه ${escapeHtml(ctx.chat.title || '')}:</b>\n\n` : `👤 <b>اطلاعات حساب کاربری شما:</b>\n\n`;
+    const bills = target.savedBills || [];
+    const notifStatus = target.notifications?.enabled !== false ? '🟢 فعال (ساعت ۸:۰۰ صبح)' : '🔴 غیرفعال';
+
+    let body = `${title}🔔 <b>وضعیت هشدار خودکار روزانه:</b> ${notifStatus}\n`;
+    if (bills.length === 0) {
+      body += `📄 <b>شناسه قبض ثبت‌شده:</b> ثبت نشده است!\n\n` +
+        `<i>💡 برای ثبت شناسه: <code>/setbill 1234567890123 نام محل</code></i>`;
+    } else {
+      body += `📄 <b>شناسه‌های ثبت‌شده (${toPersianDigits(bills.length)} مورد):</b>\n`;
+      bills.forEach((b, i) => {
+        body += `${toPersianDigits(i + 1)}. <b>${escapeHtml(b.label)}</b>: <code>${toPersianDigits(b.billId)}</code>\n`;
+      });
+      body += `\n<i>💡 برای استعلام: <code>/check</code> یا <code>/today</code></i>`;
+    }
+
+    await ctx.reply(body, { parse_mode: 'HTML' });
+  });
+
+  bot.command(['notif', 'notification', 'alerts'], async (ctx) => {
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    if (isGroup) {
+      if (!(await isGroupAdmin(env, ctx))) {
+        await ctx.reply('⛔️ فقط مدیران گروه مجاز به تغییر تنظیمات هشدار این گروه هستند.');
+        return;
+      }
+    }
+
+    const targetId = isGroup ? ctx.chat.id : ctx.from.id;
+    const target = await storage.getUser(targetId);
+    const requestedState = parseNotificationSetting(ctx.message.text);
+    const nextState = requestedState ?? !(target.notifications?.enabled !== false);
+    await storage.setNotifications(targetId, nextState);
+    const msg = nextState
+      ? '✅ هشدار خودکار روزانه (ساعت ۸:۰۰ صبح) فعال شد.'
+      : '🔕 هشدار خودکار روزانه غیرفعال شد.';
+    await ctx.reply(msg);
   });
 
   // Admin Commands
@@ -969,7 +1242,7 @@ function createBot(env, executionCtx = null) {
 
   // Main Menu Buttons
   bot.hears('⚡️ خاموشی امروز', async (ctx) => {
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
     const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
     if (!billId) {
@@ -980,7 +1253,7 @@ function createBot(env, executionCtx = null) {
   });
 
   bot.hears('🗓 خاموشی فردا', async (ctx) => {
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
     const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
     if (!billId) {
@@ -991,7 +1264,7 @@ function createBot(env, executionCtx = null) {
   });
 
   bot.hears('📋 کل برنامه هفتگی', async (ctx) => {
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const savedBills = Array.isArray(user.savedBills) ? user.savedBills : [];
     const billId = user.activeBillId || (savedBills.length > 0 ? savedBills[0].billId : null);
     if (!billId) {
@@ -1002,9 +1275,9 @@ function createBot(env, executionCtx = null) {
   });
 
   bot.hears(['🔖 نشان‌شده‌های من', '📂 شناسه‌های من'], async (ctx) => {
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const text = formatSavedBillsList(user.savedBills, user.activeBillId);
-    const kb = getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
+    const kb = isGroupChat(ctx) ? undefined : getSavedBillsInlineKeyboard(user.savedBills, user.activeBillId);
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   });
 
@@ -1173,6 +1446,14 @@ function createBot(env, executionCtx = null) {
     const userId = ctx.from.id;
     await ctx.answerCallbackQuery().catch(() => { });
 
+    if (isGroupChat(ctx) && !data.startsWith('sched:') && !data.startsWith('sched_refresh:')) {
+      await ctx.answerCallbackQuery({
+        text: 'تنظیمات گروه را با دستورات /setbill و /notif مدیریت کنید.',
+        show_alert: true
+      }).catch(() => {});
+      return;
+    }
+
     if (data.startsWith('sched:') || data.startsWith('sched_refresh:')) {
       const parts = data.split(':');
       const mode = parts[1] || 'all';
@@ -1300,7 +1581,7 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
       return;
     }
 
-    const user = await storage.getUser(ctx.from.id);
+    const user = await storage.getUser(getChatTargetId(ctx));
     const savedBills = Array.isArray(user?.savedBills) ? user.savedBills : [];
     const savedItem = savedBills.find(b => b.billId === billId);
     const customLabel = savedItem ? savedItem.label : '';
@@ -1308,7 +1589,9 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
 
     const result = await fetchGopedSchedule(billId, forceFresh, storage);
     const text = formatScheduleMessage(result, mode, customLabel);
-    const replyMarkup = result.Code === 1 ? getScheduleInlineKeyboard(billId, mode, isBookmarked) : undefined;
+    const replyMarkup = result.Code === 1
+      ? getScheduleInlineKeyboard(billId, mode, isBookmarked, !isGroupChat(ctx))
+      : undefined;
 
     if (isEdit && ctx.callbackQuery?.message) {
       try {
@@ -1358,7 +1641,7 @@ async function runScheduledNotifications(env, bot, storage, force = false) {
 
   const allUsers = await storage.getAllUsers();
   const subscribed = allUsers.filter(u => u.notifications?.enabled !== false && u.savedBills?.length > 0);
-  console.log(`[Scheduled] Checking ${subscribed.length} subscribed users for date ${todayJalali}`);
+  console.log(`[Scheduled] Checking ${subscribed.length} subscribed targets for date ${todayJalali}`);
 
   let totalChecked = 0;
   let totalNotified = 0;
@@ -1378,12 +1661,16 @@ async function runScheduledNotifications(env, bot, storage, force = false) {
 
         const todayBlackouts = schedule.Result.Blackouts.filter(b => {
           const info = parseDateInfo(b.Date || b.date);
-          return info.gregorianStr === todayGregorian || info.jalaliStr === todayJalali;
+          const isToday = info.gregorianStr === todayGregorian || info.jalaliStr === todayJalali;
+          if (!isToday) return false;
+          const from = formatTimeShort(b.from || b.From);
+          const to = formatTimeShort(b.to || b.To);
+          return !(from === '00:00' && to === '00:00');
         });
 
         if (todayBlackouts.length > 0) {
           hasTodayOutage = true;
-          let billBlock = `🏷 <b>${savedBill.label}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
+          let billBlock = `🏷 <b>${escapeHtml(savedBill.label)}</b> (<code>${toPersianDigits(savedBill.billId)}</code>):\n`;
           todayBlackouts.forEach(b => {
             billBlock += formatBlackoutCard(b, true, false) + '\n';
           });
@@ -1402,11 +1689,16 @@ async function runScheduledNotifications(env, bot, storage, force = false) {
         user.notifications.lastNotifiedDate = todayJalali;
         await storage.saveUser(user);
         totalNotified++;
-        console.log(`[Scheduled] Notification sent to user ${user.userId}`);
+        console.log(`[Scheduled] Notification sent to target ${user.userId}`);
       }
     } catch (err) {
       totalFailed++;
-      console.error(`[Scheduled] Failed to notify user ${user.userId}:`, err.message);
+      const desc = String(err?.description || err?.message || '');
+      if (/blocked|deactivated|chat not found|kicked from|not a member|forbidden/i.test(desc)) {
+        user.notifications.enabled = false;
+        await storage.saveUser(user);
+      }
+      console.error(`[Scheduled] Failed to notify target ${user.userId}:`, desc);
     }
   }
 
@@ -1478,12 +1770,13 @@ export default {
         const setCommandsRes = await bot.api.setMyCommands([
           { command: 'start', description: 'شروع و منوی اصلی' },
           { command: 'check', description: 'استعلام قطعی برق (مثال: /check 1234567890123)' },
+          { command: 'setbill', description: 'تنظیم شناسه قبض برای گروه یا حساب شما' },
+          { command: 'today', description: 'برنامه قطعی برق امروز' },
+          { command: 'tomorrow', description: 'برنامه قطعی برق فردا' },
+          { command: 'groupinfo', description: 'مشاهده مشخصات و وضعیت هشدار گروه' },
+          { command: 'notif', description: 'فعال/غیرفعال‌سازی هشدار روزانه' },
           { command: 'bookmarks', description: 'لیست و مدیریت قبض‌های نشان‌شده' },
-          { command: 'bookmark', description: 'افزودن شناسه قبض جدید' },
           { command: 'notice', description: 'آخرین اطلاعیه‌های شرکت توزیع' },
-          { command: 'shout', description: 'ارسال پیام همگانی به همه کاربران (ادمین)' },
-          { command: 'users', description: 'مشاهده آمار و لیست کاربران (ادمین)' },
-          { command: 'testnotif', description: 'تست ارسال هشدار روزانه (ادمین)' },
           { command: 'help', description: 'راهنما' }
         ]).catch(() => true);
         const info = await bot.api.getWebhookInfo();

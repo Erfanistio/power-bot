@@ -61,7 +61,7 @@ export function getStartInlineKeyboard(savedBills = []) {
 /**
  * Inline keyboard attached below a schedule query message.
  */
-export function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = false) {
+export function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmarked = false, canManage = true) {
   const kb = new InlineKeyboard();
 
   if (currentMode !== 'today') {
@@ -77,11 +77,13 @@ export function getScheduleInlineKeyboard(billId, currentMode = 'all', isBookmar
   kb.row();
   kb.text('🔄 بروزرسانی', `sched_refresh:${currentMode}:${billId}`);
 
-  if (!isBookmarked) {
-    kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
-  } else {
-    kb.text('✏️ تغییر نام', `rename_prompt:${billId}`);
-    kb.text('🗑 حذف نشان', `delete_bill_do:${billId}`);
+  if (canManage) {
+    if (!isBookmarked) {
+      kb.text('🔖 نشان کردن این قبض', `save_prompt:${billId}`);
+    } else {
+      kb.text('✏️ تغییر نام', `rename_prompt:${billId}`);
+      kb.text('🗑 حذف نشان', `delete_bill_do:${billId}`);
+    }
   }
 
   return kb;
