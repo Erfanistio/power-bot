@@ -28,10 +28,26 @@ export function getMainReplyKeyboard(savedBills = []) {
     .row()
     .text('🔔 هشدار خودکار').text('📢 اطلاعیه‌ها')
     .row()
-    .text('➕ افزودن نشان جدید').text('ℹ️ راهنما')
+    .text('🏠 صفحه اصلی').text('➕ افزودن نشان جدید')
+    .row()
+    .text('ℹ️ راهنما')
     .resized();
 
   return kb;
+}
+
+/**
+ * Inline keyboard shown under /start message when the user has NO bookmarks yet.
+ * Once a bookmark is saved, this inline keyboard will not be shown.
+ * @param {Array<{ billId: string, label: string }>} savedBills
+ */
+export function getStartInlineKeyboard(savedBills = []) {
+  if (!savedBills || savedBills.length === 0) {
+    const kb = new InlineKeyboard();
+    kb.text('🔖➕ افزودن اولین نشان (Bookmark)', 'add_bill_prompt');
+    return kb;
+  }
+  return undefined;
 }
 
 /**

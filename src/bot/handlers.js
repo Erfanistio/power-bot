@@ -8,6 +8,7 @@ import {
 } from './formatters.js';
 import {
   getMainReplyKeyboard,
+  getStartInlineKeyboard,
   getScheduleInlineKeyboard,
   getSavedBillsInlineKeyboard,
   getDeleteBillsInlineKeyboard,
@@ -65,19 +66,37 @@ export function registerBotHandlers(bot, notifierService = null) {
     await next();
   });
 
-  // /start command
-  bot.command('start', async (ctx) => {
+  // Shared handler for /start and Home / Main Menu navigation
+  const handleStartOrHome = async (ctx) => {
     userStates.delete(ctx.from.id);
     const user = db.getUser(ctx.from.id);
-    if (user.savedBills?.length > 0) {
+    const hasBookmarks = user.savedBills && user.savedBills.length > 0;
+    if (hasBookmarks) {
       gopedApi.warmupBills(user.savedBills.map(b => b.billId));
     }
-    const welcome = formatWelcomeMessage(ctx.from.first_name);
-    await ctx.reply(welcome, {
-      parse_mode: 'HTML',
-      reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
-    });
-  });
+    const welcome = formatWelcomeMessage(ctx.from.first_name, hasBookmarks);
+    const startInlineKb = getStartInlineKeyboard(user.savedBills);
+
+    if (startInlineKb) {
+      await ctx.reply(welcome, {
+        parse_mode: 'HTML',
+        reply_markup: startInlineKb
+      });
+      if (ctx.chat?.type === 'private') {
+        await ctx.reply('👇 یا از گزینه‌های منوی زیر استفاده فرمایید:', {
+          reply_markup: getMainReplyKeyboard(user.savedBills)
+        });
+      }
+    } else {
+      await ctx.reply(welcome, {
+        parse_mode: 'HTML',
+        reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
+      });
+    }
+  };
+
+  // /start command
+  bot.command('start', handleStartOrHome);
 
   // /help command
   bot.command('help', async (ctx) => {
@@ -328,7 +347,20 @@ export function registerBotHandlers(bot, notifierService = null) {
     await handleSavedBillsQuery(ctx);
   });
 
-  bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید'], async (ctx) => {
+  bot.hears([
+    '🏠 صفحه اصلی',
+    'صفحه اصلی',
+    '🏠 منوی اصلی',
+    'منوی اصلی',
+    '🏠 بازگشت به صفحه اصلی',
+    'بازگشت به صفحه اصلی',
+    '🏠 خانه',
+    'خانه'
+  ], async (ctx) => {
+    await handleStartOrHome(ctx);
+  });
+
+  bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید', 'افزودن نشان جدید', 'افزودن شناسه جدید'], async (ctx) => {
     userStates.set(ctx.from.id, { step: 'awaiting_bill_id' });
     await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
   });
@@ -341,7 +373,7 @@ export function registerBotHandlers(bot, notifierService = null) {
     await handleNoticeQuery(ctx);
   });
 
-  bot.hears('ℹ️ راهنما', async (ctx) => {
+  bot.hears(['ℹ️ راهنما', 'راهنما'], async (ctx) => {
     const user = db.getUser(ctx.from.id);
     const helpText = `📖 <b>راهنمای ربات:</b>\n\n` +
       `⚡️ این ربات اطلاعات خاموشی را مستقیماً از سامانه رسمی شرکت توزیع نیروی برق استان گلستان (goped.ir) دریافت می‌کند.\n\n` +
@@ -581,8 +613,7 @@ export function registerBotHandlers(bot, notifierService = null) {
 
     // Back to main
     if (data === 'back_to_main') {
-      const user = db.getUser(userId);
-      await ctx.reply('منوی اصلی:', { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
+      await handleStartOrHome(ctx);
       return;
     }
   });

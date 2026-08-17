@@ -474,10 +474,21 @@ function getMainReplyKeyboard(savedBills = []) {
     .row()
     .text('🔔 هشدار خودکار').text('📢 اطلاعیه‌ها')
     .row()
-    .text('➕ افزودن نشان جدید').text('ℹ️ راهنما')
+    .text('🏠 صفحه اصلی').text('➕ افزودن نشان جدید')
+    .row()
+    .text('ℹ️ راهنما')
     .resized();
 
   return kb;
+}
+
+function getStartInlineKeyboard(savedBills = []) {
+  if (!savedBills || savedBills.length === 0) {
+    const kb = new InlineKeyboard();
+    kb.text('🔖➕ افزودن اولین نشان (Bookmark)', 'add_bill_prompt');
+    return kb;
+  }
+  return undefined;
 }
 
 function getPrivateReplyKeyboard(ctx, savedBills = []) {
@@ -705,22 +716,49 @@ function createBot(env, executionCtx = null) {
     await next();
   });
 
-  bot.command('start', async (ctx) => {
+  const handleStartOrHome = async (ctx) => {
     await storage.setState(ctx.from.id, null);
     const user = await storage.getUser(ctx.from.id);
-    const welcome = `سلام ${ctx.from.first_name || ''} عزیز! 👋\n` +
-      `به <b>بات استعلام خاموشی برق استان گلستان</b> خوش آمدید. ⚡️💡\n\n` +
-      `با این بات می‌توانید:\n` +
-      `• برنامه قطعی برق امروز، فردا و کل هفته را در لحظه ببینید.\n` +
-      `• قبض‌های خود را <b>نشان (Bookmark)</b> کنید تا همیشه روی کیبورد در دسترستان باشند.\n` +
-      `• هر روز صبح ساعت ۸:۰۰ در صورت وجود قطعی، پیام هشدار خودکار دریافت کنید.\n\n` +
-      `👇 <b>برای شروع:</b>\nشناسه قبض ۱۳ رقمی خود را ارسال کنید یا از دکمه‌های زیر استفاده نمایید.`;
+    const hasBookmarks = user.savedBills && user.savedBills.length > 0;
+    const name = ctx.from.first_name ? ` <b>${ctx.from.first_name}</b>` : '';
 
-    await ctx.reply(welcome, {
-      parse_mode: 'HTML',
-      reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
-    });
-  });
+    let welcome = `سلام${name} عزیز! 👋\n` +
+      `به <b>سامانه هوشمند اطلاع‌رسانی خاموشی برق گلستان</b> خوش آمدید. ⚡️💡\n\n` +
+      `با استفاده از این سامانه می‌توانید در هر لحظه از برنامه دقیق مدیریت اضطراری بار و قطعی برق مطلع شوید.\n\n` +
+      `🌟 <b>امکانات ربات:</b>\n` +
+      `• ⚡️ <b>استعلام آنی:</b> مشاهده برنامه خاموشی امروز، فردا و کل هفته\n` +
+      `• 🔖 <b>نشان کردن (Bookmark):</b> ذخیره آسان شناسه قبض‌ها (منزل، محل کار، مغازه...) برای دسترسی سریع\n` +
+      `• 🔔 <b>هشدار هوشمند:</b> اطلاع‌رسانی خودکار روزانه قبل از شروع خاموشی\n` +
+      `• 📢 <b>اطلاعیه‌ها:</b> دسترسی به آخرین اخبار رسمی شرکت توزیع نیروی برق استان گلستان\n\n`;
+
+    if (!hasBookmarks) {
+      welcome += `👇 <b>شروع سریع:</b>\n` +
+        `برای شروع، شناسه قبض <b>۱۳ رقمی</b> خود را ارسال کنید یا دکمهٔ <b>«افزودن اولین نشان»</b> زیر را لمس نمایید:`;
+    } else {
+      welcome += `👇 <b>انتخاب عملیات:</b>\n` +
+        `شناسه قبض مورد نظر خود را ارسال نمایید یا یکی از گزینه‌های منوی زیر را انتخاب کنید:`;
+    }
+
+    const startInlineKb = getStartInlineKeyboard(user.savedBills);
+    if (startInlineKb) {
+      await ctx.reply(welcome, {
+        parse_mode: 'HTML',
+        reply_markup: startInlineKb
+      });
+      if (ctx.chat?.type === 'private') {
+        await ctx.reply('👇 یا از گزینه‌های منوی زیر استفاده فرمایید:', {
+          reply_markup: getMainReplyKeyboard(user.savedBills)
+        });
+      }
+    } else {
+      await ctx.reply(welcome, {
+        parse_mode: 'HTML',
+        reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills)
+      });
+    }
+  };
+
+  bot.command('start', handleStartOrHome);
 
   bot.command('help', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
@@ -977,6 +1015,24 @@ function createBot(env, executionCtx = null) {
     await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getNotificationSettingsKeyboard(isEnabled) });
   });
 
+  bot.hears([
+    '🏠 صفحه اصلی',
+    'صفحه اصلی',
+    '🏠 منوی اصلی',
+    'منوی اصلی',
+    '🏠 بازگشت به صفحه اصلی',
+    'بازگشت به صفحه اصلی',
+    '🏠 خانه',
+    'خانه'
+  ], async (ctx) => {
+    await handleStartOrHome(ctx);
+  });
+
+  bot.hears(['➕ افزودن نشان جدید', '➕ افزودن شناسه جدید', 'افزودن نشان جدید', 'افزودن شناسه جدید'], async (ctx) => {
+    await storage.setState(ctx.from.id, { step: 'awaiting_bill_id' });
+    await ctx.reply('لطفاً شناسه قبض ۱۳ رقمی را ارسال فرمایید:');
+  });
+
   bot.hears('📢 اطلاعیه‌ها', async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
     try {
@@ -991,7 +1047,7 @@ function createBot(env, executionCtx = null) {
     }
   });
 
-  bot.hears('ℹ️ راهنما', async (ctx) => {
+  bot.hears(['ℹ️ راهنما', 'راهنما'], async (ctx) => {
     const user = await storage.getUser(ctx.from.id);
     const helpText = `📖 <b>راهنمای ربات:</b>\n\n` +
       `⚡️ این ربات اطلاعات خاموشی را مستقیماً از سامانه رسمی شرکت توزیع نیروی برق استان گلستان (goped.ir) دریافت می‌کند.\n\n` +
@@ -1220,8 +1276,7 @@ function createBot(env, executionCtx = null) {
     }
 
     if (data === 'back_to_main') {
-      const user = await storage.getUser(userId);
-      await ctx.reply('منوی اصلی:', { reply_markup: getPrivateReplyKeyboard(ctx, user.savedBills) });
+      await handleStartOrHome(ctx);
       return;
     }
   });
