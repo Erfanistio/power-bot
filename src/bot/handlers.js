@@ -71,9 +71,6 @@ export function registerBotHandlers(bot, notifierService = null) {
     userStates.delete(ctx.from.id);
     const user = db.getUser(ctx.from.id);
     const hasBookmarks = user.savedBills && user.savedBills.length > 0;
-    if (hasBookmarks) {
-      gopedApi.warmupBills(user.savedBills.map(b => b.billId));
-    }
     const welcome = formatWelcomeMessage(ctx.from.first_name, hasBookmarks);
     const startInlineKb = getStartInlineKeyboard(user.savedBills);
 
@@ -120,10 +117,6 @@ export function registerBotHandlers(bot, notifierService = null) {
 
   // /bookmarks and /bills command
   bot.command(['bookmarks', 'bills', 'saved'], async (ctx) => {
-    const user = db.getUser(ctx.from.id);
-    if (user.savedBills?.length > 0) {
-      gopedApi.warmupBills(user.savedBills.map(b => b.billId));
-    }
     await handleSavedBillsQuery(ctx);
   });
 

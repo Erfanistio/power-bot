@@ -21,17 +21,6 @@ export class GopedApiClient {
   }
 
   /**
-   * Pre-fetches schedule data for multiple bills in the background.
-   */
-  async warmupBills(billIds = []) {
-    if (!Array.isArray(billIds)) return;
-    const cleanIds = billIds.map(id => this.cleanBillId(id)).filter(Boolean);
-    const toWarm = cleanIds.filter(id => !this.hasData(id));
-    if (toWarm.length === 0) return;
-    Promise.allSettled(toWarm.map(id => this.getSchedule(id))).catch(() => {});
-  }
-
-  /**
    * Sanitizes and extracts English numeric Bill ID.
    */
   cleanBillId(rawBillId) {
@@ -96,7 +85,7 @@ export class GopedApiClient {
       const entry = this._store.get(billId);
       // Trigger silent background update if older than 90 seconds
       if (Date.now() - entry.timestamp > 90 * 1000) {
-        this.fetchFresh(billId).catch(() => {});
+        this.fetchFresh(billId).catch(() => { });
       }
       return { ...entry.data, isInstant: true };
     }
@@ -116,7 +105,7 @@ export class GopedApiClient {
     const fetchPromise = (async () => {
       try {
         const data = await this._fetch(`Api/GetSchedule_Web?BillId=${encodeURIComponent(billId)}`);
-        
+
         if (!data || data.Code !== 1 || !data.Result) {
           return {
             success: false,
