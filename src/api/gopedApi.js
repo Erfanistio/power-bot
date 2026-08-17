@@ -21,6 +21,17 @@ export class GopedApiClient {
   }
 
   /**
+   * Pre-fetches schedule data for multiple bills in the background.
+   */
+  async warmupBills(billIds = []) {
+    if (!Array.isArray(billIds)) return;
+    const cleanIds = billIds.map(id => this.cleanBillId(id)).filter(Boolean);
+    const toWarm = cleanIds.filter(id => !this.hasData(id));
+    if (toWarm.length === 0) return;
+    Promise.allSettled(toWarm.map(id => this.getSchedule(id))).catch(() => {});
+  }
+
+  /**
    * Sanitizes and extracts English numeric Bill ID.
    */
   cleanBillId(rawBillId) {
