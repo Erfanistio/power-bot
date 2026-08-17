@@ -485,7 +485,7 @@ function getMainReplyKeyboard(savedBills = []) {
 function getStartInlineKeyboard(savedBills = []) {
   if (!savedBills || savedBills.length === 0) {
     const kb = new InlineKeyboard();
-    kb.text('🔖➕ افزودن اولین نشان (Bookmark)', 'add_bill_prompt');
+    kb.text('🔵 📌 افزودن اولین نشان (Bookmark) ✨', 'add_bill_prompt');
     return kb;
   }
   return undefined;
