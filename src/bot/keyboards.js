@@ -43,9 +43,17 @@ export function getMainReplyKeyboard(savedBills = []) {
  */
 export function getStartInlineKeyboard(savedBills = []) {
   if (!savedBills || savedBills.length === 0) {
-    const kb = new InlineKeyboard();
-    kb.text('🔵 📌 افزودن اولین نشان (Bookmark) ✨', 'add_bill_prompt');
-    return kb;
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: '🔵 📌 افزودن اولین نشان (Bookmark) ✨',
+            callback_data: 'add_bill_prompt',
+            style: 'primary'
+          }
+        ]
+      ]
+    };
   }
   return undefined;
 }

@@ -131,7 +131,7 @@ function parseDateInfo(dateStr) {
   if (!dateStr) return { jalaliStr: '', weekday: '', gregorianStr: '', isToday: false, isTomorrow: false };
   const cleaned = toEnglishDigits(String(dateStr)).trim().split('T')[0].split(' ')[0];
   const parts = cleaned.replace(/[-.]/g, '/').split('/');
-  
+
   let gy, gm, gd, jy, jm, jd;
 
   if (parts.length === 3) {
@@ -484,9 +484,17 @@ function getMainReplyKeyboard(savedBills = []) {
 
 function getStartInlineKeyboard(savedBills = []) {
   if (!savedBills || savedBills.length === 0) {
-    const kb = new InlineKeyboard();
-    kb.text('🔵 📌 افزودن اولین نشان (Bookmark) ✨', 'add_bill_prompt');
-    return kb;
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: '🔵 📌 افزودن اولین نشان (Bookmark) ✨',
+            callback_data: 'add_bill_prompt',
+            style: 'primary'
+          }
+        ]
+      ]
+    };
   }
   return undefined;
 }
@@ -925,7 +933,7 @@ function createBot(env, executionCtx = null) {
         `⏱ <b>مدت زمان:</b> <code>${toPersianDigits(durationSec)}</code> ثانیه`;
 
       await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, report, { parse_mode: 'HTML' }).catch(async () => {
-        await ctx.reply(report, { parse_mode: 'HTML' }).catch(() => {});
+        await ctx.reply(report, { parse_mode: 'HTML' }).catch(() => { });
       });
     };
 
@@ -1163,7 +1171,7 @@ function createBot(env, executionCtx = null) {
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const userId = ctx.from.id;
-    await ctx.answerCallbackQuery().catch(() => {});
+    await ctx.answerCallbackQuery().catch(() => { });
 
     if (data.startsWith('sched:') || data.startsWith('sched_refresh:')) {
       const parts = data.split(':');
@@ -1311,7 +1319,7 @@ async function executeScheduleLookup(ctx, storage, rawBillId, mode = 'all', isEd
       } catch (editErr) {
         const errMsg = String(editErr?.message || editErr?.description || '');
         if (errMsg.includes('message is not modified')) {
-          await ctx.answerCallbackQuery({ text: '✅ اطلاعات هم‌اکنون بروز است.' }).catch(() => {});
+          await ctx.answerCallbackQuery({ text: '✅ اطلاعات هم‌اکنون بروز است.' }).catch(() => { });
         } else {
           await ctx.reply(text, { parse_mode: 'HTML', reply_markup: replyMarkup });
         }
