@@ -47,7 +47,7 @@ export function getStartInlineKeyboard(savedBills = []) {
       inline_keyboard: [
         [
           {
-            text: '🔵 📌 افزودن اولین نشان (Bookmark) ✨',
+            text: '🔵 📌 افزودن اولین بوکمارک ➕',
             callback_data: 'add_bill_prompt',
             style: 'primary'
           }
