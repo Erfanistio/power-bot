@@ -1559,11 +1559,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    console.log('[Cron] Running daily scheduled outage check on Cloudflare Workers...');
-    const token = env.BOT_TOKEN || '8931573991:AAEFAPuyGHGvKi8okFQFCKuHRUGqw6_fRDY';
-    const bot = new Bot(token);
-    const storage = new CloudflareStorage(env.POWERBOT_KV);
-    await runScheduledNotifications(env, bot, storage, false);
+    console.log('[Cron] Cloudflare cron trigger received, but daily notifications are handled by Railway server.');
   }
 };
 
